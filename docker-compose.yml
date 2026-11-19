@@ -1,0 +1,17 @@
+services:
+  link-extractor:
+    build: .
+    image: link-extractor:latest
+    container_name: link-extractor
+    hostname: link-extractor
+    restart: always
+    env_file: .env
+    volumes:
+      - ./data:/app/data
+    networks:
+      - remnawave-network
+
+networks:
+  remnawave-network:
+    name: remnawave-network
+    external: true

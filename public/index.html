@@ -1,0 +1,338 @@
+<!doctype html>
+<html lang="ru">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Экстрактор ссылок</title>
+<style>
+  :root{--bg:#0b1118;--panel:#111a23;--panel2:#16212c;--line:#22303d;--text:#d7e1ea;--muted:#7d8c99;--accent:#22c5e6;--accent2:#0e8fae;--ok:#3ccf8e;--err:#ff6b6b;--warn:#f5b84b}
+  *{box-sizing:border-box}
+  body{margin:0;background:radial-gradient(1200px 600px at 10% -10%,#12324080,transparent),var(--bg);color:var(--text);font:14px/1.45 Inter,system-ui,-apple-system,Segoe UI,Roboto,sans-serif;min-height:100vh}
+  a{color:var(--accent)}
+  .wrap{max-width:1180px;margin:0 auto;padding:24px 20px 60px}
+  header{display:flex;align-items:center;gap:14px;margin-bottom:22px}
+  header h1{font-size:20px;margin:0;font-weight:650;letter-spacing:.2px}
+  header .sp{flex:1}
+  .back{color:var(--muted);text-decoration:none;font-size:13px}
+  .back:hover{color:var(--text)}
+  .icon{width:34px;height:34px;border-radius:10px;display:grid;place-items:center;background:linear-gradient(135deg,var(--accent),var(--accent2));color:#041016}
+  .card{background:linear-gradient(180deg,var(--panel),#0f171f);border:1px solid var(--line);border-radius:14px;padding:18px;margin-bottom:18px}
+  .card h2{font-size:12px;letter-spacing:1.4px;text-transform:uppercase;color:var(--muted);margin:0 0 12px;display:flex;align-items:center;gap:8px}
+  .card h2:before{content:"";width:3px;height:12px;background:var(--accent);border-radius:2px}
+  textarea,input[type=text],input[type=password],input[type=number]{width:100%;background:var(--bg);color:var(--text);border:1px solid var(--line);border-radius:10px;padding:10px 12px;font:13px/1.45 ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;outline:none}
+  textarea{min-height:140px;resize:vertical}
+  textarea:focus,input:focus{border-color:var(--accent2)}
+  .row{display:flex;gap:10px;align-items:center;flex-wrap:wrap}
+  .row.mt{margin-top:12px}
+  button{background:var(--panel2);color:var(--text);border:1px solid var(--line);border-radius:9px;padding:8px 14px;font:inherit;cursor:pointer;transition:.15s}
+  button:hover{border-color:var(--accent2)}
+  button.primary{background:linear-gradient(135deg,var(--accent),var(--accent2));color:#031218;border:0;font-weight:600}
+  button.danger:hover{border-color:var(--err);color:var(--err)}
+  button:disabled{opacity:.5;cursor:default}
+  .stats{display:grid;grid-template-columns:repeat(auto-fit,minmax(180px,1fr));gap:12px;margin-bottom:18px}
+  .stat{background:var(--panel);border:1px solid var(--line);border-radius:12px;padding:14px 16px}
+  .stat b{display:block;font-size:22px;font-weight:650}
+  .stat span{color:var(--muted);font-size:12px}
+  table{width:100%;border-collapse:collapse;font-size:13px}
+  th,td{padding:8px 10px;border-bottom:1px solid var(--line);text-align:left;vertical-align:middle}
+  th{color:var(--muted);font-weight:500;font-size:12px}
+  tr.off td{opacity:.45}
+  .tag{display:inline-block;padding:2px 8px;border-radius:999px;font-size:11px;font-weight:600;background:#22c5e61a;color:var(--accent);border:1px solid #22c5e640}
+  .tag.hysteria2,.tag.tuic{background:#a78bfa1a;color:#c4b5fd;border-color:#a78bfa40}
+  .tag.trojan{background:#f5b84b1a;color:var(--warn);border-color:#f5b84b40}
+  .tag.ss{background:#3ccf8e1a;color:var(--ok);border-color:#3ccf8e40}
+  .tag.vmess{background:#ff6b6b1a;color:#ff9d9d;border-color:#ff6b6b40}
+  .muted{color:var(--muted)}
+  .mono{font-family:ui-monospace,Menlo,Consolas,monospace;font-size:12px}
+  .err{color:var(--err)}
+  .src{border:1px solid var(--line);border-radius:12px;margin-bottom:12px;overflow:hidden}
+  .src-h{display:flex;gap:12px;align-items:center;padding:12px 14px;background:var(--panel2);flex-wrap:wrap}
+  .src-h .t{flex:1;min-width:200px;word-break:break-all}
+  .src-b{padding:4px 6px 8px;overflow-x:auto}
+  .switch{position:relative;width:38px;height:22px;flex:none}
+  .switch input{opacity:0;width:0;height:0}
+  .switch i{position:absolute;inset:0;background:#2a3a48;border-radius:999px;cursor:pointer;transition:.2s}
+  .switch i:before{content:"";position:absolute;width:16px;height:16px;left:3px;top:3px;background:#fff;border-radius:50%;transition:.2s}
+  .switch input:checked+i{background:var(--accent2)}
+  .switch input:checked+i:before{transform:translateX(16px)}
+  .toast{position:fixed;right:20px;bottom:20px;background:var(--panel2);border:1px solid var(--line);padding:10px 14px;border-radius:10px;opacity:0;transform:translateY(8px);transition:.2s;pointer-events:none}
+  .toast.show{opacity:1;transform:none}
+  .login{max-width:360px;margin:14vh auto}
+  .hidden{display:none!important}
+  select{background:var(--bg);color:var(--text);border:1px solid var(--line);border-radius:10px;padding:9px 10px;font:inherit;outline:none;max-width:100%}
+  select:focus{border-color:var(--accent2)}
+  .field{display:flex;flex-direction:column;gap:6px;min-width:220px;flex:1}
+  .field label{font-size:12px;color:var(--muted)}
+  .grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(240px,1fr));gap:12px;margin-top:12px}
+  .squad{display:inline-flex;align-items:center;gap:6px;padding:3px 10px;border-radius:999px;font-size:12px;background:#3ccf8e14;border:1px solid #3ccf8e40;color:var(--ok)}
+  .squad.all{background:#f5b84b14;border-color:#f5b84b40;color:var(--warn)}
+  .mini{font-size:12px;padding:6px 8px}
+  .copy{cursor:pointer;border:0;background:none;color:var(--muted);padding:2px 6px}
+  .copy:hover{color:var(--accent)}
+</style>
+</head>
+<body>
+<div class="wrap">
+  <header>
+    <div class="icon"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M10 13a5 5 0 0 0 7.5.5l3-3a5 5 0 0 0-7-7l-1.7 1.7"/><path d="M14 11a5 5 0 0 0-7.5-.5l-3 3a5 5 0 0 0 7 7l1.7-1.7"/></svg></div>
+    <h1>Экстрактор ссылок</h1>
+    <div class="sp"></div>
+    <a class="back" href="/">← В панель</a>
+    <button id="logout" class="hidden">Выйти</button>
+  </header>
+
+  <div id="loginBox" class="card login hidden">
+    <h2>Вход</h2>
+    <input type="password" id="pwd" placeholder="Пароль (ADMIN_PASSWORD)" autocomplete="current-password">
+    <div class="row mt"><button class="primary" id="loginBtn">Войти</button><span id="loginErr" class="err"></span></div>
+  </div>
+
+  <div id="app" class="hidden">
+    <div class="stats">
+      <div class="stat"><b id="stActive">0</b><span>ключей выдаётся (всего)</span></div>
+      <div class="stat"><b id="stSources">0</b><span>источников</span></div>
+      <div class="stat"><b id="stSubs">0</b><span>подписок 3x-ui с автообновлением</span></div>
+      <div class="stat"><b id="stCheck">—</b><span>только активным юзерам</span></div>
+    </div>
+
+    <div class="card">
+      <h2>Добавить ключи</h2>
+      <textarea id="input" placeholder="vless://…&#10;hysteria2://…&#10;https://sub.example.com/xxxx   ← ссылка на подписку 3x-ui (по одной на строку)"></textarea>
+      <div class="grid">
+        <div class="field"><label>Название — из него имя сквада и тег хостов (ЗАГЛАВНЫМИ)</label><input type="text" id="title" placeholder="например: My VPN"></div>
+        <div class="field"><label>User-Agent для загрузки подписки</label><select id="uaSel"></select>
+          <input type="text" id="uaCustom" class="hidden" placeholder="Happ/4.13.0/ios/2606221801679"></div>
+        <div class="field"><label>Кому выдавать ключи</label><select id="scopeSel"></select></div>
+        <div class="field"><label>Тег хостов в панели</label><input type="text" id="hostTag" placeholder="по умолчанию = название ЗАГЛАВНЫМИ"></div>
+      </div>
+      <div class="row mt">
+        <button id="previewBtn">Расшифровать</button>
+        <button class="primary" id="addBtn">Добавить</button>
+        <span class="muted" id="squadHint"></span>
+      </div>
+      <div id="preview" class="hidden" style="margin-top:14px"></div>
+    </div>
+
+    <div class="card">
+      <h2>Проверка подписки юзера</h2>
+      <div class="grid" style="margin-top:0">
+        <div class="field" style="flex:2"><label>Ссылка подписки юзера или shortUuid</label><input type="text" id="dbgTarget" placeholder="https://sub.example.com/xxxxxxxx"></div>
+        <div class="field"><label>Как клиент</label><select id="dbgUa"></select></div>
+      </div>
+      <div class="row mt"><button id="dbgBtn">Проверить</button><span class="muted">Показывает, что получит клиент и почему ключи добавились или нет</span></div>
+      <pre id="dbgOut" class="mono hidden" style="white-space:pre-wrap;background:var(--bg);border:1px solid var(--line);border-radius:10px;padding:12px;margin-top:12px"></pre>
+    </div>
+
+    <div class="card">
+      <h2>Источники</h2>
+      <div class="row" style="margin-bottom:12px">
+        <button id="refreshAll">Обновить все подписки</button>
+        <span class="muted">Автообновление каждые</span>
+        <input type="number" id="refreshMin" min="1" max="1440" style="width:80px">
+        <span class="muted">мин</span>
+        <button id="saveSettings">Сохранить</button>
+      </div>
+      <div class="row" style="margin-bottom:14px">
+        <span class="muted">Инбаунд-заглушка для хостов:</span>
+        <select id="stubSel" style="min-width:320px"></select>
+        <span class="muted" style="font-size:12px">Ключи создаются хостами с этим инбаундом, в подписке заглушка подменяется на настоящий ключ</span>
+      </div>
+      <div id="sources"></div>
+    </div>
+  </div>
+</div>
+<div class="toast" id="toast"></div>
+
+<script>
+const BASE = '__BASE__';
+const $ = (id) => document.getElementById(id);
+const esc = (s) => String(s ?? '').replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
+function toast(msg, bad) { const t = $('toast'); t.textContent = msg; t.style.borderColor = bad ? 'var(--err)' : 'var(--line)'; t.classList.add('show'); clearTimeout(t._t); t._t = setTimeout(() => t.classList.remove('show'), 2600); }
+async function api(path, opts = {}) {
+  const r = await fetch(BASE + '/api' + path, { method: opts.method || 'GET', headers: { 'Content-Type': 'application/json' }, body: opts.body ? JSON.stringify(opts.body) : undefined, credentials: 'same-origin' });
+  const j = await r.json().catch(() => ({}));
+  if (r.status === 401 && path !== '/login') { showLogin(); throw new Error('Нужен вход'); }
+  if (!r.ok) throw new Error(j.error || ('HTTP ' + r.status));
+  return j;
+}
+function showLogin() { $('loginBox').classList.remove('hidden'); $('app').classList.add('hidden'); $('logout').classList.add('hidden'); $('pwd').focus(); }
+function showApp() { $('loginBox').classList.add('hidden'); $('app').classList.remove('hidden'); $('logout').classList.remove('hidden'); }
+
+function nodesTable(nodes, opts = {}) {
+  if (!nodes.length) return '<div class="muted" style="padding:8px">Ключей нет</div>';
+  return `<table><thead><tr>${opts.toggle ? '<th style="width:50px"></th>' : ''}<th>Протокол</th><th>Название</th><th>Сервер</th><th>Транспорт</th><th></th></tr></thead><tbody>${
+    nodes.map((n, i) => `<tr class="${n.off ? 'off' : ''}">${opts.toggle ? `<td><label class="switch"><input type="checkbox" data-node="${i}" ${n.off ? '' : 'checked'}><i></i></label></td>` : ''}
+      <td><span class="tag ${esc(n.protocol)}">${esc(n.protocol)}</span></td>
+      <td>${esc(n.name) || '<span class="muted">—</span>'}</td>
+      <td class="mono">${esc(n.server)}:${esc(n.port)}</td>
+      <td class="muted">${esc(n.network || '')}${n.security && n.security !== 'none' ? ' · ' + esc(n.security) : ''}</td>
+      <td><button class="copy" title="Скопировать ключ" data-copy="${esc(n.raw)}">⧉</button></td></tr>`).join('')
+  }</tbody></table>`;
+}
+
+let STATE = null;
+function uaOptions(sel) {
+  const p = STATE.uaPresets;
+  const isPreset = sel === 'auto' || p.some((x) => x.id === sel);
+  return `<option value="auto" ${sel === 'auto' ? 'selected' : ''}>Авто (перебор Happ / INCY / v2rayNG)</option>`
+    + p.map((x) => `<option value="${x.id}" ${x.id === sel ? 'selected' : ''}>${esc(x.label)} — ${esc(x.ua)}</option>`).join('')
+    + `<option value="custom" ${!isPreset && sel ? 'selected' : ''}>Свой…${!isPreset && sel ? ' (' + esc(sel) + ')' : ''}</option>`;
+}
+function scopeOptions(src) {
+  const cur = src ? (src.scope === 'all' ? 'all' : src.squadUuid) : 'new';
+  return (src ? '' : `<option value="new" selected>Создать сквад из названия</option>`)
+    + (src && src.squadError ? `<option value="new">Создать свой сквад заново</option>` : '')
+    + STATE.squads.map((q) => `<option value="${q.uuid}" ${q.uuid === cur ? 'selected' : ''}>Сквад: ${esc(q.name)} (${q.members} юз.)</option>`).join('')
+    + (src && src.squadUuid && !STATE.squads.some((q) => q.uuid === src.squadUuid) ? `<option value="" selected>Сквад удалён: ${esc(src.squadName)}</option>` : '')
+    + `<option value="all" ${cur === 'all' ? 'selected' : ''}>Всем пользователям</option>`;
+}
+function readUa() { const v = $('uaSel').value; return v === 'custom' ? ($('uaCustom').value.trim() || 'auto') : v; }
+$('uaSel').addEventListener('change', () => $('uaCustom').classList.toggle('hidden', $('uaSel').value !== 'custom'));
+$('scopeSel').addEventListener('change', () => { $('squadHint').textContent = $('scopeSel').value === 'new' ? 'Сквад создастся с инбаундом-заглушкой — добавь в него юзеров в «Внутренние сквады»' : ''; });
+
+async function load() {
+  try { STATE = await api('/state'); } catch { return; }
+  showApp();
+  const s = STATE.sources;
+  $('stActive').textContent = STATE.activeCount;
+  $('stSources').textContent = s.length;
+  $('stSubs').textContent = s.filter((x) => x.kind === 'sub').length;
+  $('stCheck').textContent = STATE.activeCheck ? 'Да' : 'Нет';
+  $('refreshMin').value = STATE.settings.refreshMinutes;
+  const keepUa = $('uaSel').value || 'auto'; const keepScope = $('scopeSel').value || 'new';
+  $('uaSel').innerHTML = uaOptions(keepUa === 'custom' ? 'auto' : keepUa); if (keepUa === 'custom') $('uaSel').value = 'custom';
+  $('scopeSel').innerHTML = scopeOptions(null); if ([...$('scopeSel').options].some((o) => o.value === keepScope)) $('scopeSel').value = keepScope;
+  $('scopeSel').dispatchEvent(new Event('change'));
+  const st = STATE.settings.stubInbound;
+  $('stubSel').innerHTML = (st ? '' : `<option value="">— не найден профиль без нод —</option>`) + STATE.inbounds.map((i) => `<option value="${i.uuid}" ${st && st.uuid === i.uuid ? 'selected' : ''}>${esc(i.profileName)} → ${esc(i.tag)} (${esc(i.type)})${i.profileNodes ? ' ⚠ на нодах: ' + i.profileNodes : ''}</option>`).join('');
+  $('hostTag').closest('.field').classList.toggle('hidden', !st);
+  if (!$('dbgUa').options.length) $('dbgUa').innerHTML = STATE.uaPresets.map((x) => `<option value="${x.id}">${esc(x.label)}</option>`).join('');
+  if (STATE.squadsError) $('squadHint').innerHTML = '<span class="err">' + esc(STATE.squadsError) + '</span>';
+  $('sources').innerHTML = s.length ? s.map((src) => `
+    <div class="src" data-id="${src.id}">
+      <div class="src-h">
+        <label class="switch" title="Включить/выключить источник"><input type="checkbox" data-src-toggle ${src.enabled ? 'checked' : ''}><i></i></label>
+        <div class="t">
+          <div><b>${esc(src.title) || (src.kind === 'sub' ? 'Подписка 3x-ui' : 'Ключи')}</b> <span class="muted">· ${src.nodes.length} ключ(ей)</span></div>
+          ${src.kind === 'sub' ? `<div class="mono muted">${esc(src.input)}</div>` : ''}
+          <div class="row" style="margin-top:6px;gap:8px">
+            <span class="squad ${src.scope === 'all' ? 'all' : ''}">${src.scope === 'all' ? 'Всем пользователям' : 'Сквад: ' + esc(src.squadName || '—')}</span>
+            <select class="mini" data-scope title="Кому выдавать">${scopeOptions(src)}</select>
+            ${src.kind === 'sub' ? `<select class="mini" data-ua title="User-Agent">${uaOptions(src.userAgent || 'auto')}</select>${src.usedUaLabel ? `<span class="muted" style="font-size:12px">сработал: ${esc(src.usedUaLabel)}</span>` : ''}` : ''}
+          </div>
+          ${src.hostMode ? `<div class="row" style="margin-top:6px;gap:8px"><span class="tag">ХОСТЫ: ${Object.keys(src.hosts || {}).length}</span><span class="muted" style="font-size:12px">тег</span><input type="text" class="mini" data-hosttag value="${esc(src.hostTag || '')}" style="width:180px"></div>` : (STATE.settings.stubInbound ? '<div style="margin-top:6px"><button class="mini" data-act="to-hosts">Создать хосты в панели</button></div>' : '')}
+          ${src.hostError ? `<div class="err">Хосты: ${esc(src.hostError)}</div>` : ''}
+          ${src.squadError ? `<div class="err">Сквад не создан: ${esc(src.squadError)} — источник выключен, выбери сквад вручную</div>` : ''}
+          ${src.error ? `<div class="err">Ошибка обновления: ${esc(src.error)} (используются последние ключи)</div>` : ''}
+          ${src.updatedAt ? `<div class="muted" style="font-size:12px">Обновлено: ${new Date(src.updatedAt).toLocaleString('ru-RU')}</div>` : ''}
+        </div>
+        ${src.kind === 'sub' ? '<button data-act="refresh">Обновить</button>' : ''}
+        <button data-act="toggle-body">Ключи</button>
+        <button class="danger" data-act="delete">Удалить</button>
+      </div>
+      <div class="src-b hidden">${nodesTable(src.nodes, { toggle: true })}</div>
+    </div>`).join('') : '<div class="muted">Пока пусто — вставь ключи выше.</div>';
+}
+
+$('sources').addEventListener('click', async (e) => {
+  const b = e.target.closest('button'); if (!b) return;
+  if (b.dataset.copy) { navigator.clipboard.writeText(b.dataset.copy); return toast('Скопировано'); }
+  const box = b.closest('.src'); const id = box?.dataset.id; if (!id) return;
+  const act = b.dataset.act;
+  try {
+    if (act === 'toggle-body') return box.querySelector('.src-b').classList.toggle('hidden');
+    if (act === 'delete') {
+      if (!confirm('Удалить источник? Его ключи пропадут из подписок.')) return;
+      const src = STATE.sources.find((x) => x.id === id);
+      const delSq = src.squadCreated && src.squadUuid && confirm(`Удалить и сквад «${src.squadName}» в Remnawave?`);
+      await api('/sources/' + id + (delSq ? '?deleteSquad=1' : ''), { method: 'DELETE' }); toast('Удалено');
+    }
+    if (act === 'to-hosts') { b.disabled = true; await api('/sources/' + id, { method: 'PATCH', body: { hostMode: true } }); toast('Хосты созданы'); }
+    if (act === 'refresh') { b.disabled = true; await api('/refresh', { method: 'POST', body: { id } }); toast('Обновлено'); }
+    await load();
+  } catch (err) { toast(err.message, true); b.disabled = false; }
+});
+$('sources').addEventListener('change', async (e) => {
+  const box = e.target.closest('.src'); const id = box?.dataset.id; if (!id) return;
+  const src = STATE.sources.find((s) => s.id === id);
+  try {
+    if (e.target.hasAttribute('data-hosttag')) { await api('/sources/' + id, { method: 'PATCH', body: { hostTag: e.target.value } }); toast('Тег обновлён'); }
+    else if (e.target.hasAttribute('data-scope')) { if (!e.target.value) return; await api('/sources/' + id, { method: 'PATCH', body: { scope: e.target.value, enabled: true } }); toast('Сохранено'); }
+    else if (e.target.hasAttribute('data-ua')) {
+      let ua = e.target.value;
+      if (ua === 'custom') { ua = prompt('User-Agent, например Happ/4.13.0/ios/2606221801679', src.userAgent && src.userAgent !== 'auto' ? src.userAgent : ''); if (!ua) return load(); }
+      e.target.disabled = true; await api('/sources/' + id, { method: 'PATCH', body: { userAgent: ua } }); toast('Подписка перезагружена');
+    }
+    else if (e.target.hasAttribute('data-src-toggle')) await api('/sources/' + id, { method: 'PATCH', body: { enabled: e.target.checked } });
+    else if (e.target.dataset.node !== undefined) {
+      const off = new Set(src.disabledLinks || []); const raw = src.nodes[+e.target.dataset.node].raw;
+      e.target.checked ? off.delete(raw) : off.add(raw);
+      await api('/sources/' + id, { method: 'PATCH', body: { disabledLinks: [...off] } });
+    }
+    const open = !box.querySelector('.src-b').classList.contains('hidden');
+    await load();
+    if (open) document.querySelector(`.src[data-id="${id}"] .src-b`)?.classList.remove('hidden');
+  } catch (err) { toast(err.message, true); }
+});
+$('preview').addEventListener('click', (e) => { const b = e.target.closest('[data-copy]'); if (b) { navigator.clipboard.writeText(b.dataset.copy); toast('Скопировано'); } });
+
+$('previewBtn').onclick = async () => {
+  const text = $('input').value.trim(); if (!text) return toast('Вставь ключи или ссылку', true);
+  $('previewBtn').disabled = true;
+  try {
+    const r = await api('/preview', { method: 'POST', body: { text, userAgent: readUa() } });
+    $('preview').classList.remove('hidden');
+    $('preview').innerHTML = r.sources.length ? r.sources.map((s) => `
+      <div class="src"><div class="src-h"><div class="t"><b>${s.kind === 'sub' ? 'Подписка' : 'Ключи'}</b> <span class="mono muted">${esc(s.input)}</span>
+      ${s.usedUa ? `<div class="muted" style="font-size:12px">User-Agent: ${esc(s.usedUa)}</div>` : ''}${s.userinfo ? `<div class="muted" style="font-size:12px">${esc(s.userinfo)}</div>` : ''}</div><span class="muted">${s.nodes.length} шт.</span></div>
+      <div class="src-b">${nodesTable(s.nodes)}${s.errors.map((er) => `<div class="err" style="padding:6px 10px">✕ ${esc(er.error)} <span class="mono muted">${esc(er.raw.slice(0, 80))}</span></div>`).join('')}</div></div>`).join('')
+      : '<div class="muted">Ничего не нашёл. Поддерживаются vless, vmess, trojan, ss, hysteria2, tuic и ссылки на подписки.</div>';
+  } catch (err) { toast(err.message, true); }
+  $('previewBtn').disabled = false;
+};
+$('addBtn').onclick = async () => {
+  const text = $('input').value.trim(); if (!text) return toast('Вставь ключи или ссылку', true);
+  $('addBtn').disabled = true;
+  try {
+    const r = await api('/sources', { method: 'POST', body: { text, title: $('title').value.trim(), userAgent: readUa(), scope: $('scopeSel').value, tag: $('hostTag').value.trim() } });
+    const n = r.created.reduce((a, s) => a + (s.links?.length || 0), 0);
+    const errs = r.created.filter((s) => s.error || s.squadError);
+    const sq = r.created.filter((s) => s.squadCreated).map((s) => s.squadName);
+    toast(errs.length ? `Добавлено, но ошибка: ${errs[0].squadError || errs[0].error}` : `Добавлено ключей: ${n}${sq.length ? ' · сквад: ' + sq.join(', ') : ''}`, !!errs.length);
+    if (r.created.length) { $('input').value = ''; $('title').value = ''; $('hostTag').value = ''; $('preview').classList.add('hidden'); }
+    await load();
+  } catch (err) { toast(err.message, true); }
+  $('addBtn').disabled = false;
+};
+$('dbgBtn').onclick = async () => {
+  const target = $('dbgTarget').value.trim(); if (!target) return toast('Вставь ссылку подписки', true);
+  $('dbgBtn').disabled = true; $('dbgOut').classList.remove('hidden'); $('dbgOut').textContent = 'Проверяю…';
+  try {
+    const r = await api('/debug', { method: 'POST', body: { target, userAgent: $('dbgUa').value } });
+    const L = [];
+    L.push('Юзер: ' + (r.remnawave.error ? 'ошибка API — ' + r.remnawave.error : `${r.remnawave.username} · ${r.remnawave.status} · сквады: ${r.remnawave.squads.join(', ') || '—'}`));
+    if (r.upstreamError) L.push('Remnawave не ответил: ' + r.upstreamError);
+    if (r.upstream) L.push(`Ответ Remnawave: HTTP ${r.upstream.status}, ${r.upstream.contentType || '?'}, ${r.upstream.bytes} байт`);
+    if (r.result) {
+      if (r.result.hostsReplaced || r.result.hostsDropped) L.push(`Хосты-заглушки: подменено ${r.result.hostsReplaced}, убрано ${r.result.hostsDropped}`);
+      L.push(`Формат: ${r.result.format} · ключей для юзера: ${r.result.extraForUser ?? 0} · добавлено: ${r.result.added}`);
+      L.push(r.result.added ? '✅ Ключи добавляются' : '❌ Не добавлено: ' + r.result.reason);
+    } else if (r.upstream) L.push('❌ Remnawave вернул не 200 — подписку не трогаем');
+    if (r.upstream) L.push('\nНачало ответа:\n' + r.upstream.sample);
+    $('dbgOut').textContent = L.join('\n');
+  } catch (e) { $('dbgOut').textContent = 'Ошибка: ' + e.message; }
+  $('dbgBtn').disabled = false;
+};
+$('refreshAll').onclick = async () => { $('refreshAll').disabled = true; try { await api('/refresh', { method: 'POST', body: {} }); toast('Подписки обновлены'); await load(); } catch (e) { toast(e.message, true); } $('refreshAll').disabled = false; };
+$('saveSettings').onclick = async () => { try { await api('/settings', { method: 'POST', body: { refreshMinutes: +$('refreshMin').value } }); toast('Сохранено'); } catch (e) { toast(e.message, true); } };
+$('stubSel').onchange = async () => { try { await api('/settings', { method: 'POST', body: { stubInbound: $('stubSel').value || null } }); toast('Инбаунд-заглушка сохранена'); await load(); } catch (e) { toast(e.message, true); } };
+$('loginBtn').onclick = async () => {
+  $('loginErr').textContent = '';
+  try { await api('/login', { method: 'POST', body: { password: $('pwd').value } }); $('pwd').value = ''; await load(); } catch (e) { $('loginErr').textContent = e.message; }
+};
+$('pwd').addEventListener('keydown', (e) => { if (e.key === 'Enter') $('loginBtn').click(); });
+$('logout').onclick = async () => { await api('/logout', { method: 'POST' }).catch(() => {}); showLogin(); };
+load();
+</script>
+</body>
+</html>
