@@ -91,13 +91,13 @@
     <div class="stats">
       <div class="stat"><b id="stActive">0</b><span>ключей выдаётся (всего)</span></div>
       <div class="stat"><b id="stSources">0</b><span>источников</span></div>
-      <div class="stat"><b id="stSubs">0</b><span>подписок 3x-ui с автообновлением</span></div>
+      <div class="stat"><b id="stSubs">0</b><span>подписок с автообновлением</span></div>
       <div class="stat"><b id="stCheck">—</b><span>только активным юзерам</span></div>
     </div>
 
     <div class="card">
       <h2>Добавить ключи</h2>
-      <textarea id="input" placeholder="vless://…&#10;hysteria2://…&#10;https://sub.example.com/xxxx   ← ссылка на подписку 3x-ui (по одной на строку)"></textarea>
+      <textarea id="input" placeholder="vless://…&#10;hysteria2://…&#10;https://sub.example.com/xxxx   ← ссылка на подписку (по одной на строку)"></textarea>
       <div class="grid">
         <div class="field"><label>Название — из него имя сквада и тег хостов (ЗАГЛАВНЫМИ)</label><input type="text" id="title" placeholder="например: My VPN"></div>
         <div class="field"><label>User-Agent для загрузки подписки</label><select id="uaSel"></select>
@@ -213,7 +213,7 @@ async function load() {
       <div class="src-h">
         <label class="switch" title="Включить/выключить источник"><input type="checkbox" data-src-toggle ${src.enabled ? 'checked' : ''}><i></i></label>
         <div class="t">
-          <div><b>${esc(src.title) || (src.kind === 'sub' ? 'Подписка 3x-ui' : 'Ключи')}</b> <span class="muted">· ${src.nodes.length} ключ(ей)</span></div>
+          <div><b>${esc(src.title) || (src.kind === 'sub' ? 'Подписка' : 'Ключи')}</b> <span class="muted">· ${src.nodes.length} ключ(ей)</span></div>
           ${src.kind === 'sub' ? `<div class="mono muted">${esc(src.input)}</div>` : ''}
           <div class="row" style="margin-top:6px;gap:8px">
             <span class="squad ${src.scope === 'all' ? 'all' : ''}">${src.scope === 'all' ? 'Всем пользователям' : 'Сквад: ' + esc(src.squadName || '—')}</span>

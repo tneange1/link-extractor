@@ -1,7 +1,7 @@
 {
   "name": "link-extractor",
   "version": "1.0.0",
-  "description": "Экстрактор ссылок для Remnawave: добавляет ключи 3x-ui во все подписки",
+  "description": "Экстрактор ссылок для Remnawave: добавляет сторонние ключи в подписки",
   "main": "src/server.js",
   "type": "commonjs",
   "scripts": {

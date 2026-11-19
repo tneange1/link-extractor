@@ -1,5 +1,5 @@
 'use strict';
-// Хранилище источников (ключи и ссылки на подписки 3x-ui) в JSON-файле + автообновление.
+// Хранилище источников (ключи и ссылки на подписки) в JSON-файле + автообновление.
 const fs = require('fs');
 const path = require('path');
 const crypto = require('crypto');
@@ -115,7 +115,7 @@ async function ensureStub() {
   return stub();
 }
 
-// Перевод старых источников: сквады без «3xui», ЗАГЛАВНЫМИ, с инбаундом-заглушкой, и хосты в панели
+// Перевод старых источников: сквады без старого префикса, ЗАГЛАВНЫМИ, с инбаундом-заглушкой, и хосты в панели
 async function migrate() {
   if (!rw.enabled() || !(await ensureStub())) return;
   let changed = false;
@@ -139,13 +139,49 @@ function hostSquads(src) {
   return src.scope === 'squad' && src.squadUuid ? { mode: 'ALLOW_ONLY', squads: [src.squadUuid] } : { mode: 'EXCLUDE', squads: [] };
 }
 
+// Чистит название: убирает мусор вроде ^~2~^, оставляет буквы, цифры, эмодзи/флаги и разделители
+function cleanRemark(name) {
+  const s = String(name || '')
+    .replace(/[^\p{L}\p{N}\p{Extended_Pictographic}\u{1F1E6}-\u{1F1FF}\u200d\ufe0f\s·|()\-.,:+]/gu, ' ')
+    .replace(/\s+/g, ' ').trim();
+  return s.replace(/^[\s·|\-.,:]+|[\s·|\-.,:]+$/g, '').trim();
+}
+
+// Если название занято — берём следующий номер: «🇳🇱 Нидерланды», «🇳🇱 Нидерланды 2», «… 3»
+function uniqueRemark(name, used) {
+  const clean = (cleanRemark(name) || 'Server').slice(0, 95);
+  const key = (x) => x.toLowerCase();
+  if (!used.has(key(clean))) { used.add(key(clean)); return clean; }
+  const base = clean.replace(/\s+\d+$/, '');
+  let max = 1;
+  const re = new RegExp(`^${base.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}(?:\\s+(\\d+))?$`, 'i');
+  for (const u of used) { const m = u.match(re); if (m) max = Math.max(max, m[1] ? parseInt(m[1], 10) : 1); }
+  const name2 = `${base} ${max + 1}`;
+  used.add(key(name2));
+  return name2;
+}
+
 async function syncHosts(src) {
   const st = stub();
   if (!src.hostMode || !st || !rw.enabled()) return;
   src.hosts = src.hosts || {};
   // Хост удалили руками в панели → считаем ключ выключенным и не пересоздаём
-  let panel;
-  try { panel = new Set((await rw.listHosts()).map((h) => h.uuid)); } catch (e) { src.hostError = e.message; return; }
+  let panelHosts;
+  try { panelHosts = await rw.listHosts(); } catch (e) { src.hostError = e.message; return; }
+  const panel = new Set(panelHosts.map((h) => h.uuid));
+  const byUuid = new Map(panelHosts.map((h) => [h.uuid, h]));
+  // занятые названия — все хосты панели, кроме наших ещё не почищенных
+  const used = new Set(panelHosts.filter((h) => !Object.values(src.hosts).some((x) => x.uuid === h.uuid && !x.cleaned)).map((h) => String(h.remark).toLowerCase()));
+  // разовая чистка уже созданных хостов: название без мусора, без описания сервера
+  for (const h of Object.values(src.hosts)) {
+    const ph = byUuid.get(h.uuid);
+    if (!ph || h.cleaned) continue;
+    try {
+      const remark = uniqueRemark(ph.remark, used);
+      await rw.updateHost({ uuid: h.uuid, remark, serverDescription: null });
+      h.cleaned = true;
+    } catch (e) { src.hostError = e.message; }
+  }
   const off = new Set(src.disabledLinks || []);
   for (const [id, h] of Object.entries(src.hosts)) {
     if (!panel.has(h.uuid)) { if (h.raw) off.add(h.raw); delete src.hosts[id]; }
@@ -163,15 +199,14 @@ async function syncHosts(src) {
     try {
       const h = await rw.createHost({
         inbound: { configProfileUuid: st.profileUuid, configProfileInboundUuid: st.uuid },
-        remark: String(x.node.name || x.node.server).slice(0, 100) || 'key',
+        remark: uniqueRemark(x.node.name || x.node.server, used),
         address: markerAddress(x.node.server, id),
         port: x.node.port,
         tags: [src.hostTag || 'VPN'],
         isDisabled: !src.enabled,
-        serverDescription: `3x-ui ${x.node.protocol}`.slice(0, 30),
         internalSquads: hostSquads(src),
       });
-      src.hosts[id] = { uuid: h.uuid, raw: x.raw };
+      src.hosts[id] = { uuid: h.uuid, raw: x.raw, cleaned: true };
     } catch (e) { errs.push(e.message); }
   }
   src.hostError = errs.length ? errs[0] : undefined;
