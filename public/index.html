@@ -114,6 +114,26 @@
     </div>
 
     <div class="card">
+      <h2>Группы стран (автовыбор)</h2>
+      <div class="row" style="margin-bottom:12px">
+        <label class="switch"><input type="checkbox" id="grpOn"><i></i></label>
+        <span>Одна точка входа на страну + общий автовыбор, ключи — скрытые хосты</span>
+      </div>
+      <div class="row" style="margin-bottom:12px">
+        <span class="muted">Название общего автовыбора:</span>
+        <input type="text" id="allName" style="max-width:280px">
+        <button id="saveAllName">Сохранить</button>
+      </div>
+      <div id="groupsList" class="row" style="gap:8px"></div>
+      <div class="muted" style="font-size:12px;margin-top:10px">В Happ / Clash / sing-box это автовыбор по пингу. В простых base64-клиентах (v2rayNG и т.п.) автовыбора нет — там ключи страны идут списком «США 1, США 2…», а общий автовыбор не показывается.</div>
+    </div>
+
+    <div class="card">
+      <h2>Telegram-уведомления</h2>
+      <div class="row"><span id="tgState" class="muted"></span><button id="tgTest">Отправить тест</button></div>
+    </div>
+
+    <div class="card">
       <h2>Проверка подписки юзера</h2>
       <div class="grid" style="margin-top:0">
         <div class="field" style="flex:2"><label>Ссылка подписки юзера или shortUuid</label><input type="text" id="dbgTarget" placeholder="https://sub.example.com/xxxxxxxx"></div>
@@ -206,6 +226,10 @@ async function load() {
   const st = STATE.settings.stubInbound;
   $('stubSel').innerHTML = (st ? '' : `<option value="">— не найден профиль без нод —</option>`) + STATE.inbounds.map((i) => `<option value="${i.uuid}" ${st && st.uuid === i.uuid ? 'selected' : ''}>${esc(i.profileName)} → ${esc(i.tag)} (${esc(i.type)})${i.profileNodes ? ' ⚠ на нодах: ' + i.profileNodes : ''}</option>`).join('');
   $('hostTag').closest('.field').classList.toggle('hidden', !st);
+  $('grpOn').checked = !!STATE.settings.groupsEnabled;
+  $('allName').value = STATE.settings.allGroupName || '';
+  $('groupsList').innerHTML = STATE.groups.length ? STATE.groups.map((g) => `<span class="squad ${g.code === 'ALL' ? 'all' : ''}" title="${g.inPanel ? 'есть в панели' : 'ещё не создана в панели'}">${esc(g.name)} · ${g.count}${g.inPanel ? '' : ' ⏳'}</span>`).join('') : '<span class="muted">Групп пока нет</span>';
+  $('tgState').innerHTML = STATE.telegram ? '✅ Бот настроен: уведомления о новых/пропавших ключах, ошибках подписок и обновлениях' : 'Не настроено: впиши <code>TG_BOT_TOKEN</code> и <code>TG_CHAT_ID</code> в .env';
   if (!$('dbgUa').options.length) $('dbgUa').innerHTML = STATE.uaPresets.map((x) => `<option value="${x.id}">${esc(x.label)}</option>`).join('');
   if (STATE.squadsError) $('squadHint').innerHTML = '<span class="err">' + esc(STATE.squadsError) + '</span>';
   $('sources').innerHTML = s.length ? s.map((src) => `
@@ -314,7 +338,7 @@ $('dbgBtn').onclick = async () => {
     if (r.upstreamError) L.push('Remnawave не ответил: ' + r.upstreamError);
     if (r.upstream) L.push(`Ответ Remnawave: HTTP ${r.upstream.status}, ${r.upstream.contentType || '?'}, ${r.upstream.bytes} байт`);
     if (r.result) {
-      if (r.result.hostsReplaced || r.result.hostsDropped) L.push(`Хосты-заглушки: подменено ${r.result.hostsReplaced}, убрано ${r.result.hostsDropped}`);
+      if (r.result.hostsReplaced || r.result.hostsDropped || r.result.groups) L.push(`Хосты-заглушки: групп-автовыборов ${r.result.groups || 0}, ключей подменено ${r.result.hostsReplaced}, убрано ${r.result.hostsDropped}`);
       L.push(`Формат: ${r.result.format} · ключей для юзера: ${r.result.extraForUser ?? 0} · добавлено: ${r.result.added}`);
       L.push(r.result.added ? '✅ Ключи добавляются' : '❌ Не добавлено: ' + r.result.reason);
     } else if (r.upstream) L.push('❌ Remnawave вернул не 200 — подписку не трогаем');
@@ -323,6 +347,9 @@ $('dbgBtn').onclick = async () => {
   } catch (e) { $('dbgOut').textContent = 'Ошибка: ' + e.message; }
   $('dbgBtn').disabled = false;
 };
+$('grpOn').onchange = async () => { $('grpOn').disabled = true; try { await api('/settings', { method: 'POST', body: { groupsEnabled: $('grpOn').checked } }); toast('Сохранено'); await load(); } catch (e) { toast(e.message, true); } $('grpOn').disabled = false; };
+$('saveAllName').onclick = async () => { try { await api('/settings', { method: 'POST', body: { allGroupName: $('allName').value } }); toast('Сохранено'); await load(); } catch (e) { toast(e.message, true); } };
+$('tgTest').onclick = async () => { try { await api('/notify-test', { method: 'POST' }); toast('Отправлено — проверь Telegram'); } catch (e) { toast(e.message, true); } };
 $('refreshAll').onclick = async () => { $('refreshAll').disabled = true; try { await api('/refresh', { method: 'POST', body: {} }); toast('Подписки обновлены'); await load(); } catch (e) { toast(e.message, true); } $('refreshAll').disabled = false; };
 $('saveSettings').onclick = async () => { try { await api('/settings', { method: 'POST', body: { refreshMinutes: +$('refreshMin').value } }); toast('Сохранено'); } catch (e) { toast(e.message, true); } };
 $('stubSel').onchange = async () => { try { await api('/settings', { method: 'POST', body: { stubInbound: $('stubSel').value || null } }); toast('Инбаунд-заглушка сохранена'); await load(); } catch (e) { toast(e.message, true); } };

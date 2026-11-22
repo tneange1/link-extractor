@@ -6,6 +6,7 @@ const path = require('path');
 const crypto = require('crypto');
 const store = require('./store');
 const rw = require('./remnawave');
+const notify = require('./notify');
 const { mergeSubscription } = require('./merge');
 const { replaceMarkers } = require('./replace');
 
@@ -95,7 +96,7 @@ async function handleAdmin(req, res, pathname) {
       try { squads = rw.enabled() ? await rw.listSquads() : []; } catch (e) { squadsError = e.message; }
       if (!rw.enabled()) squadsError = 'REMNAWAVE_API_TOKEN не задан — сквады недоступны';
       let inbounds = []; try { inbounds = rw.enabled() ? await rw.listInbounds() : []; } catch (e) { squadsError = squadsError || e.message; }
-      return send(res, 200, { sources, squads, inbounds, squadsError, uaPresets: store.UA_PRESETS.map(({ id, label, ua }) => ({ id, label, ua })), settings: store.settings(), activeCount: store.totalActive(), activeCheck: ONLY_ACTIVE && rw.enabled() });
+      return send(res, 200, { groups: store.groupsSummary(), telegram: notify.enabled(), sources, squads, inbounds, squadsError, uaPresets: store.UA_PRESETS.map(({ id, label, ua }) => ({ id, label, ua })), settings: store.settings(), activeCount: store.totalActive(), activeCheck: ONLY_ACTIVE && rw.enabled() });
     }
     if (route === 'POST /preview') { const { text, userAgent } = await readBody(req); return send(res, 200, await store.preview(text, userAgent || 'auto')); }
     if (route === 'POST /sources') { const b = await readBody(req); return send(res, 200, { created: await store.add(b.text, { title: b.title, userAgent: b.userAgent || 'auto', scope: b.scope || 'new', tag: b.tag }) }); }
@@ -121,9 +122,13 @@ async function handleAdmin(req, res, pathname) {
       out.upstream = { status: r.status, contentType: r.headers.get('content-type'), bytes: body.length, sample: body.toString('utf8').slice(0, 300) };
       if (r.status === 200) {
         const a = await augment(shortUuid, body, r.headers.get('content-type') || '');
-        out.result = { hostsReplaced: a.hostsReplaced, hostsDropped: a.hostsDropped, format: a.format, added: a.added, extraForUser: a.extraCount, reason: a.reason, squadsMatched: a.user?.squads?.length };
+        out.result = { groups: a.groups, hostsReplaced: a.hostsReplaced, hostsDropped: a.hostsDropped, format: a.format, added: a.added, extraForUser: a.extraCount, reason: a.reason, squadsMatched: a.user?.squads?.length };
       }
       return send(res, 200, out);
+    }
+    if (route === 'POST /notify-test') {
+      if (!notify.enabled()) return send(res, 400, { error: 'В .env не заданы TG_BOT_TOKEN и TG_CHAT_ID' });
+      return (await notify.send('✅ Тестовое уведомление: бот настроен правильно')) ? send(res, 200, { ok: true }) : send(res, 502, { error: 'Telegram не принял сообщение — проверь токен и chat id (бот должен быть в чате)' });
     }
     if (route === 'POST /settings') { return send(res, 200, await store.setSettings(await readBody(req))); }
     const m = sub.match(/^\/api\/sources\/([0-9a-f-]{36})$/);
@@ -158,9 +163,16 @@ async function augment(shortUuid, bodyIn, ct) {
   const res = { body: null, format: 'skip', added: 0, reason: '' };
   try {
     // 1) подмена хостов-заглушек на настоящие ключи (кому выдавать — решил сам Remnawave)
-    const rep = replaceMarkers(body.toString('utf8'), ct, store.resolveMarker);
+    const text0 = body.toString('utf8');
+    let squads = [];
+    if (text0.includes('.le-') || /^[A-Za-z0-9+/=\s]+$/.test(text0.slice(0, 200))) {
+      const info = await getUserInfo(shortUuid);
+      squads = info.squads || [];
+    }
+    const rep = replaceMarkers(text0, ct, { resolve: store.resolveMarker, expand: (code) => store.expandGroup(code, squads) });
+    res.groups = rep.groups;
     res.hostsReplaced = rep.replaced; res.hostsDropped = rep.dropped;
-    if (rep.replaced || rep.dropped) { body = Buffer.from(rep.body, 'utf8'); res.body = rep.body; res.format = rep.format; res.added = rep.replaced; }
+    if (rep.replaced || rep.dropped || rep.groups) { body = Buffer.from(rep.body, 'utf8'); res.body = rep.body; res.format = rep.format; res.added = rep.replaced + rep.groups; }
     // 2) старый режим: дописывание ключей источников без хостов
     if (!store.hasAnySources()) { if (!res.added) res.reason = 'нет включённых источников с ключами'; return res; }
     const info = await getUserInfo(shortUuid);

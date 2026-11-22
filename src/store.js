@@ -5,6 +5,8 @@ const path = require('path');
 const crypto = require('crypto');
 const { parseLink, extractLinksFromText, summarize, isStub } = require('./parse');
 const rw = require('./remnawave');
+const notify = require('./notify');
+const { countryOf, groupName } = require('./countries');
 
 const DATA_DIR = process.env.DATA_DIR || path.join(__dirname, '..', 'data');
 const FILE = path.join(DATA_DIR, 'store.json');
@@ -23,7 +25,7 @@ const UA_PRESETS = [
 // Порядок перебора в режиме «Авто»
 const AUTO_ORDER = ['happ-android', 'happ-ios', 'incy-android', 'v2rayng', 'happ-windows'];
 
-let state = { sources: [], settings: { refreshMinutes: parseInt(process.env.REFRESH_MINUTES || '10', 10) } };
+let state = { sources: [], groups: {}, settings: { refreshMinutes: parseInt(process.env.REFRESH_MINUTES || '10', 10), groupsEnabled: true, allGroupName: '⚡ Авто · все страны' } };
 
 function load() {
   try {
@@ -31,6 +33,9 @@ function load() {
     if (fs.existsSync(FILE)) state = { ...state, ...JSON.parse(fs.readFileSync(FILE, 'utf8')) };
     // старые источники до появления сквадов — оставляем «всем»
     for (const s of state.sources) if (!s.scope) s.scope = 'all';
+    state.groups = state.groups || {};
+    if (state.settings.groupsEnabled === undefined) state.settings.groupsEnabled = true;
+    if (!state.settings.allGroupName) state.settings.allGroupName = '⚡ Авто · все страны';
   } catch (e) { console.error('[store] не удалось прочитать', e.message); }
 }
 
@@ -126,13 +131,14 @@ async function migrate() {
         await rw.renameSquad(src.squadUuid, name); src.squadName = name; changed = true;
       }
       if (!src.hostMode) {
-        src.hostMode = true; src.hostTag = rw.hostTag(src.title || src.squadName || defaultTitle(src)); changed = true;
-        await syncHosts(src);
+        src.hostMode = true; src.hostTag = rw.hostTag(src.title || src.squadName || defaultTitle(src));
       }
+      await syncHosts(src); changed = true; // спрячет ключи под группы, почистит названия
       if (src.squadUuid) await rw.ensureSquadInbound(src.squadUuid, stub().uuid);
     } catch (e) { src.hostError = e.message; console.warn('[migrate]', e.message); }
   }
   if (changed) save();
+  await syncGroups();
 }
 
 function hostSquads(src) {
@@ -175,10 +181,13 @@ async function syncHosts(src) {
   // разовая чистка уже созданных хостов: название без мусора, без описания сервера
   for (const h of Object.values(src.hosts)) {
     const ph = byUuid.get(h.uuid);
-    if (!ph || h.cleaned) continue;
+    if (!ph) continue;
+    const wantHidden = !!state.settings.groupsEnabled;
+    if (h.cleaned && !!ph.isHidden === wantHidden) continue;
     try {
-      const remark = uniqueRemark(ph.remark, used);
-      await rw.updateHost({ uuid: h.uuid, remark, serverDescription: null });
+      const patch = { uuid: h.uuid, isHidden: wantHidden };
+      if (!h.cleaned) { patch.remark = uniqueRemark(ph.remark, used); patch.serverDescription = null; }
+      await rw.updateHost(patch);
       h.cleaned = true;
     } catch (e) { src.hostError = e.message; }
   }
@@ -204,6 +213,7 @@ async function syncHosts(src) {
         port: x.node.port,
         tags: [src.hostTag || 'VPN'],
         isDisabled: !src.enabled,
+        isHidden: !!state.settings.groupsEnabled,
         internalSquads: hostSquads(src),
       });
       src.hosts[id] = { uuid: h.uuid, raw: x.raw, cleaned: true };
@@ -219,19 +229,120 @@ async function updateHostsMeta(src) {
   }
 }
 
-// Ключ по id маркера (для подмены заглушек в подписке)
-let markerCache = { ver: -1, map: new Map() };
+// ---------- группы: одна видимая точка входа на страну + «все страны», ключи скрыты ----------
+const groupId = (code) => crypto.createHash('sha1').update(`le-group:${code}`).digest('hex').slice(0, 8);
+const ALL = 'ALL';
+
+// Состояние хостов в панели (вкл/выкл/удалён) — обновляется раз в минуту
+let hostStates = null; // Map uuid -> { off, remark }
+async function refreshHostStates() {
+  if (!rw.enabled()) return;
+  try { hostStates = new Map((await rw.listHosts()).map((h) => [h.uuid, { off: !!h.isDisabled, remark: h.remark }])); } catch (e) { console.warn('[host-states]', e.message); }
+}
+const hostAlive = (uuid) => !hostStates || (hostStates.has(uuid) && !hostStates.get(uuid).off);
+const hostRemark = (uuid) => hostStates?.get(uuid)?.remark;
+
+// Кэш: id маркера → ключ (+ страна и источник)
+let markerCache = { ver: -1, keys: new Map() };
 let version = 0;
-function resolveMarker(id) {
+function keysIndex() {
   if (markerCache.ver !== version) {
-    const map = new Map();
+    const keys = new Map();
     for (const src of state.sources) {
       if (!src.hostMode || !src.enabled) continue;
-      for (const x of decodeLinks(src.links || []).ok) map.set(keyId(x.raw), x);
+      for (const x of decodeLinks(src.links || []).ok) {
+        const id = keyId(x.raw);
+        keys.set(id, { ...x, id, src, country: countryOf(x.node.name), hostUuid: src.hosts?.[id]?.uuid });
+      }
     }
-    markerCache = { ver: version, map };
+    markerCache = { ver: version, keys };
   }
-  return markerCache.map.get(id) || null;
+  return markerCache.keys;
+}
+
+function resolveMarker(id) {
+  const k = keysIndex().get(id);
+  if (k) return { type: 'key', raw: k.raw, node: k.node };
+  for (const [code, g] of Object.entries(state.groups || {})) {
+    if (g.id === id) return { type: 'group', code, name: code === ALL ? state.settings.allGroupName : groupName(code) };
+  }
+  return null;
+}
+
+// Ключи группы, доступные юзеру с такими сквадами
+function expandGroup(code, squads) {
+  const set = new Set(squads || []);
+  const out = [];
+  for (const k of keysIndex().values()) {
+    if (code !== ALL && k.country !== code) continue;
+    if (k.src.scope !== 'all' && !(k.src.squadUuid && set.has(k.src.squadUuid))) continue;
+    if (!k.hostUuid || !hostAlive(k.hostUuid)) continue;
+    // название берём из скрытого хоста в панели (его можно переименовать), иначе — почищенное из ключа
+    out.push({ ...k, node: { ...k.node, name: hostRemark(k.hostUuid) || cleanRemark(k.node.name) || k.node.server } });
+  }
+  return out;
+}
+
+// Создаёт/обновляет/удаляет видимые хосты групп в панели
+async function syncGroups() {
+  const st = stub();
+  if (!st || !rw.enabled()) return;
+  const want = new Map(); // code -> {squads:Set, all:boolean}
+  if (state.settings.groupsEnabled) {
+    for (const k of keysIndex().values()) {
+      if (!k.hostUuid) continue;
+      for (const code of [k.country, ALL]) {
+        const w = want.get(code) || { squads: new Set(), all: false };
+        if (k.src.scope === 'all') w.all = true; else if (k.src.squadUuid) w.squads.add(k.src.squadUuid);
+        want.set(code, w);
+      }
+    }
+  }
+  let panel;
+  try { panel = new Map((await rw.listHosts()).map((h) => [h.uuid, h])); } catch (e) { console.warn('[groups]', e.message); return; }
+  hostStates = new Map([...panel.values()].map((h) => [h.uuid, { off: !!h.isDisabled, remark: h.remark }]));
+  const squadsOf = (w) => (w.all ? { mode: 'EXCLUDE', squads: [] } : { mode: 'ALLOW_ONLY', squads: [...w.squads] });
+  let changed = false;
+  for (const [code, g] of Object.entries(state.groups)) {
+    if (!want.has(code)) {
+      try { if (panel.has(g.uuid)) await rw.deleteHosts([g.uuid]); } catch (e) { console.warn('[groups]', e.message); }
+      delete state.groups[code]; changed = true;
+    } else if (!panel.has(g.uuid)) {
+      // группу удалили руками в панели — пересоздадим ниже
+      delete state.groups[code]; changed = true;
+    }
+  }
+  for (const [code, w] of want) {
+    const g = state.groups[code];
+    const squads = squadsOf(w);
+    if (g) {
+      const sig = JSON.stringify(squads);
+      if (g.sig !== sig) {
+        try { await rw.updateHost({ uuid: g.uuid, internalSquads: squads }); g.sig = sig; changed = true; } catch (e) { console.warn('[groups]', e.message); }
+      }
+      continue;
+    }
+    const id = groupId(code);
+    try {
+      const h = await rw.createHost({
+        inbound: { configProfileUuid: st.profileUuid, configProfileInboundUuid: st.uuid },
+        remark: code === ALL ? state.settings.allGroupName : groupName(code),
+        address: markerAddress(code === ALL ? 'auto-all' : `auto-${code.toLowerCase()}`, id),
+        port: 443,
+        tags: ['AUTO'],
+        internalSquads: squads,
+      });
+      state.groups[code] = { uuid: h.uuid, id, sig: JSON.stringify(squads) }; changed = true;
+    } catch (e) { console.warn('[groups]', e.message); }
+  }
+  if (changed) save();
+}
+
+async function setGroupsEnabled(on) {
+  state.settings.groupsEnabled = !!on;
+  for (const src of state.sources) await syncHosts(src); // переключит isHidden у ключей
+  save();
+  await syncGroups();
 }
 
 function uaLabel(id) { const p = UA_PRESETS.find((x) => x.id === id); return p ? p.label : id; }
@@ -266,16 +377,33 @@ async function preview(text, userAgent) {
   return result;
 }
 
+const srcLabel = (src) => src.title || src.squadName || (src.kind === 'sub' ? (() => { try { return new URL(src.input).hostname; } catch { return 'подписка'; } })() : 'ключи');
+const keyNames = (links) => decodeLinks(links).ok.map((x) => x.node.name || x.node.server);
+
 async function refreshSource(src) {
   if (src.kind !== 'sub') return src;
+  const before = new Set(src.links || []);
+  const hadError = !!src.error;
   try {
     const r = await fetchSubscription(src.input, src.userAgent || 'auto');
+    if (src.updatedAt) {
+      const added = r.links.filter((l) => !before.has(l));
+      const removed = [...before].filter((l) => !r.links.includes(l));
+      if (added.length || removed.length) {
+        const lines = [`🔄 <b>${notify.esc(srcLabel(src))}</b>: ключи изменились`];
+        if (added.length) lines.push(`➕ ${added.length}: ${notify.esc(keyNames(added).slice(0, 15).join(', '))}`);
+        if (removed.length) lines.push(`➖ ${removed.length}: ${notify.esc(keyNames(removed).slice(0, 15).join(', '))}`);
+        notify.send(lines.join('\n'));
+      }
+      if (hadError) notify.send(`✅ <b>${notify.esc(srcLabel(src))}</b>: подписка снова доступна (${r.links.length} ключей)`);
+    }
     src.links = r.links;
     src.userinfo = r.userinfo;
     src.usedUa = r.usedUa;
     src.error = undefined;
     await syncHosts(src);
   } catch (e) {
+    if (!hadError) notify.send(`⚠️ <b>${notify.esc(srcLabel(src))}</b>: не удалось обновить подписку — ${notify.esc(e.message)}\nВ подписках остаются последние ключи.`);
     src.error = e.message; // старые ключи остаются в кэше
   }
   src.updatedAt = new Date().toISOString();
@@ -326,6 +454,9 @@ async function add(text, { title, userAgent = 'auto', scope = 'new', tag } = {})
   }
   state.sources.push(...created);
   save();
+  await syncGroups();
+  const n = created.reduce((a, x) => a + (x.links || []).length, 0);
+  if (n) notify.send(`➕ Добавлен источник <b>${notify.esc(created.map(srcLabel).join(', '))}</b>: ${n} ключей`);
   return created;
 }
 
@@ -350,6 +481,8 @@ async function update(id, patch) {
   if (Array.isArray(patch.disabledLinks)) s.disabledLinks = patch.disabledLinks.filter((x) => typeof x === 'string');
   if (typeof patch.scope === 'string') { await applyScope(s, patch.scope); s.squadError = undefined; await updateHostsMeta(s); }
   if (Array.isArray(patch.disabledLinks)) await syncHosts(s);
+  save();
+  await syncGroups();
   if (typeof patch.userAgent === 'string' && s.kind === 'sub') { s.userAgent = patch.userAgent.slice(0, 300) || 'auto'; await refreshSource(s); }
   save();
   return s;
@@ -364,6 +497,7 @@ async function remove(id, { deleteSquad } = {}) {
   if (src.hosts) { try { await rw.deleteHosts(Object.values(src.hosts).map((h) => h.uuid)); } catch (e) { console.warn('[hosts delete]', e.message); } }
   state.sources = state.sources.filter((x) => x.id !== id);
   save();
+  await syncGroups();
   return true;
 }
 
@@ -371,6 +505,7 @@ async function refresh(id) {
   const targets = id ? state.sources.filter((s) => s.id === id) : state.sources.filter((s) => s.kind === 'sub' && s.enabled);
   await Promise.all(targets.map(refreshSource));
   save();
+  await syncGroups();
   return targets;
 }
 
@@ -383,6 +518,12 @@ async function setSettings(patch) {
       state.settings.stubInbound = { uuid: ib.uuid, profileUuid: ib.profileUuid, tag: ib.tag, type: ib.type, profileName: ib.profileName };
     }
   }
+  if (typeof patch.allGroupName === 'string' && patch.allGroupName.trim()) {
+    state.settings.allGroupName = patch.allGroupName.trim().slice(0, 60);
+    const g = state.groups[ALL];
+    if (g) { try { await rw.updateHost({ uuid: g.uuid, remark: state.settings.allGroupName }); } catch (e) { console.warn(e.message); } }
+  }
+  if (typeof patch.groupsEnabled === 'boolean' && patch.groupsEnabled !== state.settings.groupsEnabled) await setGroupsEnabled(patch.groupsEnabled);
   const m = parseInt(patch.refreshMinutes, 10);
   if (m >= 1 && m <= 1440) state.settings.refreshMinutes = m;
   save();
@@ -424,7 +565,18 @@ function schedule() {
 function init() {
   load();
   schedule();
+  setInterval(() => refreshHostStates(), 60000).unref();
+  refreshHostStates();
   migrate().catch((e) => console.warn('[migrate]', e.message)).finally(() => refresh().catch(() => {}));
 }
 
-module.exports = { resolveMarker, syncHosts, init, preview, add, list, update, remove, refresh, settings, setSettings, extraFor, hasAnySources, totalActive, decodeLinks, UA_PRESETS, uaLabel };
+function groupsSummary() {
+  const counts = new Map();
+  for (const k of keysIndex().values()) if (k.hostUuid && hostAlive(k.hostUuid)) counts.set(k.country, (counts.get(k.country) || 0) + 1);
+  const list = [...counts].map(([code, n]) => ({ code, name: groupName(code), count: n, inPanel: !!state.groups[code] })).sort((a, b) => b.count - a.count);
+  const total = list.reduce((a, x) => a + x.count, 0);
+  if (total) list.unshift({ code: ALL, name: state.settings.allGroupName, count: total, inPanel: !!state.groups[ALL] });
+  return list;
+}
+
+module.exports = { groupsSummary, expandGroup, syncGroups, groupsInfo: () => state.groups, resolveMarker, syncHosts, init, preview, add, list, update, remove, refresh, settings, setSettings, extraFor, hasAnySources, totalActive, decodeLinks, UA_PRESETS, uaLabel };

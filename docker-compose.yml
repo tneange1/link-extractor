@@ -1,3 +1,5 @@
+name: link-extractor
+
 services:
   link-extractor:
     build: .
@@ -10,6 +12,18 @@ services:
       - ./data:/app/data
     networks:
       - remnawave-network
+
+  # Автообновление: следит за GitHub и пересобирает link-extractor (AUTO_UPDATE=false — выключить)
+  updater:
+    image: docker:27-cli
+    container_name: link-extractor-updater
+    restart: always
+    env_file: .env
+    working_dir: ${PWD}
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock
+      - ${PWD}:${PWD}
+    entrypoint: ["sh", "-c", "apk add --no-cache git curl >/dev/null 2>&1; exec sh ./updater/loop.sh"]
 
 networks:
   remnawave-network:
