@@ -119,7 +119,7 @@ async function handleAdmin(req, res, pathname) {
       try { squads = rw.enabled() ? await rw.listSquads() : []; } catch (e) { squadsError = e.message; }
       if (!rw.enabled()) squadsError = 'REMNAWAVE_API_TOKEN не задан — сквады недоступны';
       let inbounds = []; try { inbounds = rw.enabled() ? await rw.listInbounds() : []; } catch (e) { squadsError = squadsError || e.message; }
-      return send(res, 200, { version: version(), groups: store.groupsSummary(), telegram: notify.enabled(), sources, squads, inbounds, squadsError, uaPresets: store.UA_PRESETS.map(({ id, label, ua }) => ({ id, label, ua })), settings: store.settings(), activeCount: store.totalActive(), activeCheck: ONLY_ACTIVE && rw.enabled() });
+      return send(res, 200, { notify: notify.describe(), version: version(), groups: store.groupsSummary(), telegram: notify.enabled(), sources, squads, inbounds, squadsError, uaPresets: store.UA_PRESETS.map(({ id, label, ua }) => ({ id, label, ua })), settings: store.settings(), activeCount: store.totalActive(), activeCheck: ONLY_ACTIVE && rw.enabled() });
     }
     if (route === 'POST /preview') { const { text, userAgent } = await readBody(req); return send(res, 200, await store.preview(text, userAgent || 'auto')); }
     if (route === 'POST /sources') { const b = await readBody(req); return send(res, 200, { created: await store.add(b.text, { title: b.title, userAgent: b.userAgent || 'auto', scope: b.scope || 'new', tag: b.tag }) }); }
@@ -150,7 +150,7 @@ async function handleAdmin(req, res, pathname) {
       return send(res, 200, out);
     }
     if (route === 'GET /backups') return send(res, 200, { backups: backup.list() });
-    if (route === 'POST /backups') return send(res, 200, await backup.create(store.exportState(), 'manual', { send: (await readBody(req)).sendTelegram !== false }));
+    if (route === 'POST /backups') return send(res, 200, await backup.create(store.exportBackup(), 'manual', { send: (await readBody(req)).sendTelegram !== false }));
     if (route === 'POST /update') { requestFlag('.update-request'); return send(res, 200, { ok: true, note: 'Проверю GitHub в течение 30 секунд и пришлю результат в Telegram' }); }
     if (route === 'POST /update-remnawave') { requestFlag('.remnawave-update-request'); return send(res, 200, { ok: true, note: 'Обновлю образы Remnawave в течение минуты и пришлю результат в Telegram' }); }
     const bm = sub.match(/^\/api\/backups\/([A-Za-z0-9._-]+)$/);

@@ -2,6 +2,10 @@
 # tg_msg "текст" | tg_doc файл "подпись"
 PFX="🔗 <b>Link Extractor${PANEL_NAME:+ · $PANEL_NAME}</b>"
 API="${TG_API_BASE:-https://api.telegram.org}"
+if [ -f ./data/.notify.json ]; then
+  _c=$(sed -n 's/.*"chatId":"\([^"]*\)".*/\1/p' ./data/.notify.json); _t=$(sed -n 's/.*"threadId":"\([^"]*\)".*/\1/p' ./data/.notify.json)
+  [ -n "$_c" ] && TG_CHAT_ID="$_c" && TG_THREAD_ID="$_t"
+fi
 [ -z "$TG_CHAT_ID" ] && TG_CHAT_ID=$(echo "$TG_ADMIN_IDS" | tr ', ' '\n\n' | grep -m1 .)
 tg_msg() {
   [ -n "$TG_BOT_TOKEN" ] && [ -n "$TG_CHAT_ID" ] || return 0

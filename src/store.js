@@ -37,6 +37,7 @@ function load() {
     if (state.settings.groupsEnabled === undefined) state.settings.groupsEnabled = true;
     if (!state.settings.allGroupName) state.settings.allGroupName = '⚡ Авто · все страны';
     if (state.settings.remnawaveToken) rw.setToken(state.settings.remnawaveToken);
+    applyNotifyTarget();
   } catch (e) { console.error('[store] не удалось прочитать', e.message); }
 }
 
@@ -515,7 +516,21 @@ async function refresh(id) {
   return targets;
 }
 
+function applyNotifyTarget() {
+  notify.setTarget(state.settings.notifyChatId, state.settings.notifyThreadId);
+  // updater (обновления) читает тот же адрес из файла
+  try { fs.writeFileSync(path.join(DATA_DIR, '.notify.json'), JSON.stringify({ chatId: state.settings.notifyChatId || '', threadId: state.settings.notifyThreadId || '' })); } catch { /* ignore */ }
+}
+
 async function setSettings(patch) {
+  if (patch.notifyChatId !== undefined) {
+    const c = String(patch.notifyChatId || '').trim();
+    if (c && !/^-?\d{3,20}$/.test(c)) throw new Error('chat id — это число, например -1001234567890');
+    const t = String(patch.notifyThreadId || '').trim();
+    if (t && !/^\d{1,12}$/.test(t)) throw new Error('id топика — это число');
+    state.settings.notifyChatId = c || undefined; state.settings.notifyThreadId = c ? (t || undefined) : undefined;
+    applyNotifyTarget(); save();
+  }
   if (typeof patch.remnawaveToken === 'string' && patch.remnawaveToken.trim()) {
     const t = patch.remnawaveToken.trim();
     await rw.checkToken(t); // бросит понятную ошибку, если прав нет
@@ -576,12 +591,15 @@ function schedule() {
 }
 
 function exportState() { return JSON.parse(JSON.stringify(state)); }
+// для файла бэкапа: без токена Remnawave (секрет и привязан к конкретной панели)
+function exportBackup() { const s = exportState(); delete s.settings.remnawaveToken; return s; }
 
 async function restoreState(data) {
   const backup = require('./backup');
   const prev = exportState();
-  await backup.create(prev, 'before-restore', { send: false });
-  state = { ...prev, ...data, settings: { ...prev.settings, ...(data.settings || {}) }, groups: data.groups || prev.groups || {} };
+  await backup.create(exportBackup(), 'before-restore', { send: false });
+  state = { ...prev, ...data, settings: { ...prev.settings, ...(data.settings || {}), remnawaveToken: prev.settings.remnawaveToken }, groups: data.groups || prev.groups || {} };
+  applyNotifyTarget();
   if (!Array.isArray(state.sources)) state.sources = [];
   if (state.settings.groupsEnabled === undefined) state.settings.groupsEnabled = true;
   if (!state.settings.allGroupName) state.settings.allGroupName = '⚡ Авто · все страны';
@@ -596,6 +614,13 @@ async function restoreState(data) {
   try {
     const alive = new Set((await rw.listHosts()).map((h) => h.uuid));
     for (const src of state.sources) for (const [id, h] of Object.entries(src.hosts || {})) if (!alive.has(h.uuid)) delete src.hosts[id];
+    // сквады, которых больше нет в панели, создаём заново с тем же названием (юзеров в них надо будет добавить)
+    const squads = new Set((await rw.listSquads()).map((q) => q.uuid));
+    for (const src of state.sources) {
+      if (src.scope === 'squad' && src.squadUuid && !squads.has(src.squadUuid)) {
+        try { src.title = src.title || src.squadName; await applyScope(src, 'new'); } catch (e) { src.squadError = e.message; }
+      }
+    }
   } catch (e) { console.warn('[restore]', e.message); }
   for (const src of state.sources) { try { await syncHosts(src); } catch (e) { src.hostError = e.message; } }
   save();
@@ -605,7 +630,7 @@ async function restoreState(data) {
 
 function init() {
   load();
-  require('./backup').schedule(exportState);
+  require('./backup').schedule(exportBackup);
   schedule();
   setInterval(() => refreshHostStates(), 60000).unref();
   refreshHostStates();
@@ -621,4 +646,4 @@ function groupsSummary() {
   return list;
 }
 
-module.exports = { exportState, restoreState, groupsSummary, expandGroup, syncGroups, groupsInfo: () => state.groups, resolveMarker, syncHosts, init, preview, add, list, update, remove, refresh, settings, setSettings, extraFor, hasAnySources, totalActive, decodeLinks, UA_PRESETS, uaLabel };
+module.exports = { exportBackup, exportState, restoreState, groupsSummary, expandGroup, syncGroups, groupsInfo: () => state.groups, resolveMarker, syncHosts, init, preview, add, list, update, remove, refresh, settings, setSettings, extraFor, hasAnySources, totalActive, decodeLinks, UA_PRESETS, uaLabel };

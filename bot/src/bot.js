@@ -158,11 +158,18 @@ async function backupsScreen(p, s) {
   return { text: lines.join('\n'), kb: rows };
 }
 
+function notifyLine(st) {
+  const n = st.notify || {};
+  if (!n.chatId) return '🔔 Уведомления: не настроены';
+  const where = Number(n.chatId) > 0 ? `личка <code>${esc(n.chatId)}</code>` : `чат <code>${esc(n.chatId)}</code>`;
+  return `🔔 Уведомления: ${where}${n.threadId ? `, топик <code>${esc(n.threadId)}</code>` : ''}${n.custom ? '' : ' (из .env)'}`;
+}
+
 async function settingsScreen(p) {
   const st = await panels.api(p, 'GET', '/state');
   return {
-    text: ['⚙️ <b>Настройки</b>', '', `🔄 Обновление подписок: каждые <b>${st.settings.refreshMinutes}</b> мин`, `🧩 Инбаунд-заглушка: ${st.settings.stubInbound ? esc(`${st.settings.stubInbound.profileName || ''} → ${st.settings.stubInbound.tag}`) : '—'}`, `🔑 Токен Remnawave: ${st.squadsError ? `⚠️ ${esc(st.squadsError)}` : 'работает'}`].join('\n'),
-    kb: [[btn('🔄 Интервал обновления', 'set:refresh')], [btn('🧩 Инбаунд-заглушка', 'set:stub')], [btn('🔑 Токен Remnawave', 'set:rwtoken')], [btn('🔔 Тест уведомления', 'set:test')], back(`p:${p.id}`)],
+    text: ['⚙️ <b>Настройки</b>', '', `🔄 Обновление подписок: каждые <b>${st.settings.refreshMinutes}</b> мин`, `🧩 Инбаунд-заглушка: ${st.settings.stubInbound ? esc(`${st.settings.stubInbound.profileName || ''} → ${st.settings.stubInbound.tag}`) : '—'}`, `🔑 Токен Remnawave: ${st.squadsError ? `⚠️ ${esc(st.squadsError)}` : 'работает'}`, notifyLine(st)].join('\n'),
+    kb: [[btn('🔄 Интервал обновления', 'set:refresh')], [btn('🧩 Инбаунд-заглушка', 'set:stub')], [btn('🔑 Токен Remnawave', 'set:rwtoken')], [btn('🔔 Куда слать уведомления', 'set:notify')], [btn('🔔 Тест уведомления', 'set:test')], back(`p:${p.id}`)],
   };
 }
 
@@ -298,6 +305,17 @@ async function onCallback(cq) {
     if (d === 'upd') { const r = await panels.api(p, 'POST', '/update'); return done(r.note, true); }
     if (d === 'updrw') { await show(chatId, s, { text: `⬆️ Обновить панель Remnawave на «${esc(p.name)}»?\nБудут скачаны новые образы и панель перезапустится (перерыв ~10–30 секунд).`, kb: [[btn('⬆️ Да, обновить', 'updrw:yes')], back(`p:${p.id}`)] }); return done(); }
     if (d === 'updrw:yes') { const r = await panels.api(p, 'POST', '/update-remnawave'); await show(chatId, s, panelScreen(p)); return done(r.note, true); }
+    if (d === 'set:notify') {
+      const st = await panels.api(p, 'GET', '/state');
+      await show(chatId, s, { text: [`🔔 <b>Уведомления «${esc(p.name)}»</b>`, '', notifyLine(st), '',
+        '<b>В группу или топик:</b>', '1. Добавь этого бота в группу (для топиков — включи в группе «Темы»).', '2. В нужном топике отправь команду <code>/bind</code>.', '3. Нажми на панель, которую туда привязать (или «Все панели»).'].join('\n'),
+      kb: [[btn('📍 Слать мне в личку', 'set:notify:me')], [btn('↩️ Как в .env', 'set:notify:reset')], [btn('🔔 Тест', 'set:test')], back('set')] });
+      return done();
+    }
+    if (d === 'set:notify:me' || d === 'set:notify:reset') {
+      await panels.api(p, 'POST', '/settings', d === 'set:notify:me' ? { notifyChatId: String(chatId), notifyThreadId: '' } : { notifyChatId: '' });
+      await show(chatId, s, settingsScreen(p)); return done('Сохранено');
+    }
     if (d === 'set:rwtoken') { await ask(chatId, s, 'set_rwtoken', '🔑 Пришли API-токен Remnawave.\nГде взять: панель → Настройки Remnawave → API-токены → создать. Сообщение сразу удалю.'); return done(); }
     if (d.startsWith('bk:get:')) {
       const name = s.backups?.[Number(d.slice(7))];
@@ -626,12 +644,45 @@ async function onMessage(msg) {
   return null;
 }
 
+// ---------- привязка уведомлений к группе/топику ----------
+async function bindPrompt(m) {
+  const list = panels.list();
+  const thread = m.is_topic_message ? m.message_thread_id : undefined;
+  if (!list.length) return tg.send(m.chat.id, 'В боте пока нет панелей.', null, { message_thread_id: thread });
+  const kb = list.map((p) => [btn(`🖥 ${p.name}`, `bind:${p.id}`)]);
+  if (list.length > 1) kb.push([btn('🔔 Все панели', 'bind:*')]);
+  return tg.send(m.chat.id, `🔔 Какую панель присылать сюда${thread ? ' (в этот топик)' : ''}?`, kb, { message_thread_id: thread });
+}
+
+async function bindApply(cq) {
+  const m = cq.message;
+  const id = cq.data.slice(5);
+  const thread = m.is_topic_message ? m.message_thread_id : undefined;
+  const targets = id === '*' ? panels.list() : [panels.get(id)].filter(Boolean);
+  const res = [];
+  for (const p of targets) {
+    try {
+      await panels.api(p, 'POST', '/settings', { notifyChatId: String(m.chat.id), notifyThreadId: thread ? String(thread) : '' });
+      await panels.api(p, 'POST', '/notify-test').catch(() => {});
+      res.push(`✅ ${esc(p.name)}`);
+    } catch (e) { res.push(`❌ ${esc(p.name)}: ${esc(e.message)}`); }
+  }
+  tg.answer(cq.id, 'Готово');
+  return tg.edit(m.chat.id, m.message_id, `🔔 Уведомления сюда${thread ? ' (в этот топик)' : ''}:\n${res.join('\n')}`);
+}
+
 // ---------- вход ----------
 async function onUpdate(u) {
   const from = u.message?.from || u.callback_query?.from;
   if (!from) return;
   const chat = u.message?.chat || u.callback_query?.message?.chat;
-  if (chat && chat.type !== 'private') return; // только личка
+  if (chat && chat.type !== 'private') {
+    // в группах — только привязка уведомлений: /bind и кнопки под ним, и только от админов
+    if (!ADMINS.has(String(from.id))) { if (u.callback_query) tg.answer(u.callback_query.id, 'Нет доступа', true); return; }
+    if (u.message && /^\/bind(@\w+)?\b/.test(u.message.text || '')) return bindPrompt(u.message);
+    if (u.callback_query && /^bind:/.test(u.callback_query.data || '')) return bindApply(u.callback_query);
+    return;
+  }
   if (!ADMINS.has(String(from.id))) {
     if (u.message) await tg.send(from.id, `⛔ Нет доступа.\nТвой id: <code>${from.id}</code> — добавь его в <code>TG_ADMIN_IDS</code> в .env бота.`);
     else tg.answer(u.callback_query.id, 'Нет доступа', true);
@@ -653,7 +704,7 @@ async function main() {
     if (!ex) panels.add({ name: process.env.PANEL_NAME || 'Эта панель', url, token: localToken, local: true });
     else if (ex.token !== localToken) { ex.token = localToken; panels.save(); } // токен в .env поменялся — подхватываем
   }
-  await tg.call('setMyCommands', { commands: [{ command: 'start', description: 'Меню' }, { command: 'cancel', description: 'Отменить ввод' }, { command: 'id', description: 'Мой Telegram id' }] }).catch(() => {});
+  await tg.call('setMyCommands', { commands: [{ command: 'start', description: 'Меню' }, { command: 'cancel', description: 'Отменить ввод' }, { command: 'id', description: 'Мой Telegram id' }, { command: 'bind', description: 'В группе: слать сюда уведомления панели' }] }).catch(() => {});
   const me = await tg.call('getMe');
   console.log(`[bot] @${me.username} запущен, панелей: ${panels.list().length}, админов: ${ADMINS.size}`);
   await tg.poll(onUpdate);
