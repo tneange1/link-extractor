@@ -43,6 +43,7 @@ async function panelScreen(p) {
     `🌍 Группы: ${st.settings.groupsEnabled ? `вкл, стран: ${grp.length}` : 'выкл'}`,
     `🧩 Заглушка: ${st.settings.stubInbound ? esc(`${st.settings.stubInbound.profileName || ''} → ${st.settings.stubInbound.tag}`) : '—'}`,
     `🔔 Telegram: ${st.telegram ? 'да' : 'нет'} · проверка ACTIVE: ${st.activeCheck ? 'да' : 'нет'}`,
+    `🏷 Версия: ${esc(st.version || '—')}`,
   ];
   if (st.squadsError) lines.push(`\n⚠️ ${esc(st.squadsError)}`);
   return {
@@ -52,6 +53,7 @@ async function panelScreen(p) {
       [btn('🌍 Группы', 'grp'), btn('🔎 Проверить подписку', 'chk')],
       [btn('💾 Бэкапы', 'bk'), btn('⚙️ Настройки', 'set')],
       [btn('🔄 Обновить все подписки', 'refresh')],
+      [btn('⬆️ Обновить экстрактор', 'upd'), btn('⬆️ Обновить Remnawave', 'updrw')],
       [btn('✏️ Переименовать', 'pren'), btn('🗑 Убрать из бота', 'pdel')],
       back('m', '« Все панели'),
     ],
@@ -147,10 +149,10 @@ async function groupsScreen(p) {
 async function backupsScreen(p, s) {
   const r = await panels.api(p, 'GET', '/backups');
   s.backups = r.backups.slice(0, 10).map((b) => b.name);
-  const lines = ['💾 <b>Бэкапы</b>', '', 'Автоматически: данные экстрактора и БД панели (если включено) раз в сутки, с отправкой сюда.', ''];
+  const lines = ['💾 <b>Бэкапы</b>', '', 'Автоматически раз в сутки: источники, ключи, связи со сквадами и хостами, настройки — с отправкой сюда.', ''];
   lines.push(r.backups.length ? 'Последние:' : 'Бэкапов пока нет.');
-  const rows = [[btn('💾 Бэкап экстрактора', 'bk:make'), btn('🗄 Бэкап БД панели', 'bk:db')]];
-  r.backups.slice(0, 10).forEach((b, i) => rows.push([btn(`${b.kind === 'panel-db' ? '🗄' : '💾'} ${b.name.replace(/\.(json|sql\.gz)$/, '')} · ${Math.max(1, Math.round(b.size / 1024))} КБ`, `bk:get:${i}`)]));
+  const rows = [[btn('💾 Сделать бэкап сейчас', 'bk:make')]];
+  r.backups.slice(0, 10).forEach((b, i) => rows.push([btn(`💾 ${b.name.replace(/\.json$/, '')} · ${Math.max(1, Math.round(b.size / 1024))} КБ`, `bk:get:${i}`)]));
   rows.push([btn('♻️ Восстановить из файла', 'bk:restore')]);
   rows.push(back(`p:${p.id}`));
   return { text: lines.join('\n'), kb: rows };
@@ -159,8 +161,8 @@ async function backupsScreen(p, s) {
 async function settingsScreen(p) {
   const st = await panels.api(p, 'GET', '/state');
   return {
-    text: ['⚙️ <b>Настройки</b>', '', `🔄 Обновление подписок: каждые <b>${st.settings.refreshMinutes}</b> мин`, `🧩 Инбаунд-заглушка: ${st.settings.stubInbound ? esc(`${st.settings.stubInbound.profileName || ''} → ${st.settings.stubInbound.tag}`) : '—'}`].join('\n'),
-    kb: [[btn('🔄 Интервал обновления', 'set:refresh')], [btn('🧩 Инбаунд-заглушка', 'set:stub')], [btn('🔔 Тест уведомления', 'set:test')], back(`p:${p.id}`)],
+    text: ['⚙️ <b>Настройки</b>', '', `🔄 Обновление подписок: каждые <b>${st.settings.refreshMinutes}</b> мин`, `🧩 Инбаунд-заглушка: ${st.settings.stubInbound ? esc(`${st.settings.stubInbound.profileName || ''} → ${st.settings.stubInbound.tag}`) : '—'}`, `🔑 Токен Remnawave: ${st.squadsError ? `⚠️ ${esc(st.squadsError)}` : 'работает'}`].join('\n'),
+    kb: [[btn('🔄 Интервал обновления', 'set:refresh')], [btn('🧩 Инбаунд-заглушка', 'set:stub')], [btn('🔑 Токен Remnawave', 'set:rwtoken')], [btn('🔔 Тест уведомления', 'set:test')], back(`p:${p.id}`)],
   };
 }
 
@@ -293,7 +295,10 @@ async function onCallback(cq) {
       await tg.sendDoc(chatId, b.name, f.buf, `💾 Бэкап экстрактора · <b>${esc(p.name)}</b>`);
       return fresh(chatId, s, backupsScreen(p, s));
     }
-    if (d === 'bk:db') { const r = await panels.api(p, 'POST', '/backups/panel-db'); return done(r.note || 'Запрошено', true); }
+    if (d === 'upd') { const r = await panels.api(p, 'POST', '/update'); return done(r.note, true); }
+    if (d === 'updrw') { await show(chatId, s, { text: `⬆️ Обновить панель Remnawave на «${esc(p.name)}»?\nБудут скачаны новые образы и панель перезапустится (перерыв ~10–30 секунд).`, kb: [[btn('⬆️ Да, обновить', 'updrw:yes')], back(`p:${p.id}`)] }); return done(); }
+    if (d === 'updrw:yes') { const r = await panels.api(p, 'POST', '/update-remnawave'); await show(chatId, s, panelScreen(p)); return done(r.note, true); }
+    if (d === 'set:rwtoken') { await ask(chatId, s, 'set_rwtoken', '🔑 Пришли API-токен Remnawave.\nГде взять: панель → Настройки Remnawave → API-токены → создать. Сообщение сразу удалю.'); return done(); }
     if (d.startsWith('bk:get:')) {
       const name = s.backups?.[Number(d.slice(7))];
       if (!name) return done('Обнови список');
@@ -402,8 +407,8 @@ async function checkRun(chatId, s, p, ua) {
 // ---------- установка по SSH ----------
 async function installStart(chatId, s) {
   if (s.inst?.running) return tg.send(chatId, '⏳ Установка уже идёт.');
-  s.inst = { port: 22, user: 'root', autoUpdate: true, dbBackup: true, proxy: true };
-  await ask(chatId, s, 'i_host', '🛠 <b>Установка на сервер с Remnawave</b>\n\nБот подключится по SSH, поставит экстрактор, настроит Caddy/nginx, автообновление и бэкапы, и добавит панель сюда.\n\n🔒 Пароль/ключ используется только на время установки: сообщение с ним сразу удаляется, бот его не сохраняет.\n\nПришли <b>IP или домен</b> сервера:', [[btn('✖️ Отмена', 'i:cancel')]]);
+  s.inst = { port: 22, user: 'root', autoUpdate: true, proxy: true };
+  await ask(chatId, s, 'i_host', '🛠 <b>Установка на сервер с Remnawave</b>\n\nБот подключится по SSH, поставит экстрактор, настроит Caddy/nginx, автообновление и бэкапы экстрактора, и добавит панель сюда.\n\n🔒 Пароль/ключ используется только на время установки: сообщение с ним сразу удаляется, бот его не сохраняет.\n\nПришли <b>IP или домен</b> сервера:', [[btn('✖️ Отмена', 'i:cancel')]]);
 }
 
 function installSummary(s) {
@@ -415,14 +420,14 @@ function installSummary(s) {
     `🧩 Панель Remnawave: ${det.panel === '1' ? 'найдена' : '❌ не найдена'}`,
     `🌐 Reverse proxy: ${det.proxy === 'caddy' ? 'Caddy' : det.proxy === 'nginx' ? 'nginx' : 'не найден'}`,
     `📨 Домен подписки: ${esc(i.subDomain || det.sub_domain || '—')}`,
-    `🔑 API-токен Remnawave: ${det.api_token === 'found' || i.rwToken ? 'есть' : '❌ нужен'}`,
+    `🔑 API-токен Remnawave: ${i.rwToken ? 'указан' : det.api_token === 'found' ? 'уже есть в .env' : '❌ нужен (панель → Настройки Remnawave → API-токены)'}`,
     det.installed === '1' ? '♻️ Экстрактор уже стоит — обновлю, настройки сохранятся' : '',
     '', '<b>Что сделать:</b>',
     `🏷 Название: <b>${esc(i.name)}</b>`,
   ].filter((x) => x !== '');
   const kb = [
     [btn(`${i.proxy ? '✅' : '⬜'} Настроить ${det.proxy === 'nginx' ? 'nginx' : 'Caddy'} автоматически`, 'i:t:proxy')],
-    [btn(`${i.autoUpdate ? '✅' : '⬜'} Автообновление`, 'i:t:autoUpdate'), btn(`${i.dbBackup ? '✅' : '⬜'} Бэкапы БД панели`, 'i:t:dbBackup')],
+    [btn(`${i.autoUpdate ? '✅' : '⬜'} Автообновление`, 'i:t:autoUpdate')],
     [btn('✏️ Название', 'i:name'), btn('📨 Домен подписки', 'i:sub')],
   ];
   if (det.api_token !== 'found') kb.push([btn(i.rwToken ? '🔑 API-токен ✅' : '🔑 Указать API-токен Remnawave', 'i:rwtoken')]);
@@ -479,7 +484,7 @@ async function installCallback(chatId, s, a, done) {
     };
     try {
       const res = await installer.install(i.conn, {
-        name: i.name, autoUpdate: i.autoUpdate, dbBackup: i.dbBackup, proxy: i.proxy,
+        name: i.name, autoUpdate: i.autoUpdate, proxy: i.proxy,
         tgToken: TOKEN, tgChat: chatId, rwToken: i.rwToken, subDomain: i.subDomain,
       }, (d) => { log += d; flush(false); });
       await flush(true);
@@ -524,7 +529,7 @@ async function onMessage(msg) {
   if (text === '/id') return tg.send(chatId, `Твой id: <code>${msg.from.id}</code>`);
 
   const step = s.step;
-  const secret = ['i_pass', 'i_key', 'i_passphrase', 'i_rwtoken', 'np_token'].includes(step);
+  const secret = ['i_pass', 'i_key', 'i_passphrase', 'i_rwtoken', 'np_token', 'set_rwtoken'].includes(step);
   if (secret) await tg.del(chatId, msg.message_id);
   if (!step) return fresh(chatId, s, mainScreen());
 
@@ -565,6 +570,12 @@ async function onMessage(msg) {
       const n = parseInt(text, 10);
       if (!(n >= 1 && n <= 1440)) return tg.send(chatId, 'Число от 1 до 1440.');
       s.step = null; await panels.api(p, 'POST', '/settings', { refreshMinutes: n }); return fresh(chatId, s, settingsScreen(p));
+    }
+    if (step === 'set_rwtoken') {
+      s.step = null;
+      await panels.api(p, 'POST', '/settings', { remnawaveToken: text });
+      await tg.send(chatId, '✅ Токен подошёл. Синхронизирую сквады, хосты и группы — через минуту всё будет в порядке.');
+      return fresh(chatId, s, settingsScreen(p));
     }
     if (step === 'restore_file') {
       if (!msg.document) return tg.send(chatId, 'Пришли именно файл .json.');

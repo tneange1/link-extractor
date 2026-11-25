@@ -61,7 +61,7 @@ async function detect(conn) {
 
 async function install(conn, opts, onData) {
   const args = ['--mode', 'extractor', '--yes',
-    '--panel-name', opts.name, '--auto-update', opts.autoUpdate ? '1' : '0', '--db-backup', opts.dbBackup ? '1' : '0',
+    '--panel-name', opts.name, '--auto-update', opts.autoUpdate ? '1' : '0',
     '--proxy', opts.proxy ? 'auto' : 'none'];
   if (opts.tgToken) args.push('--tg-token', opts.tgToken);
   if (opts.tgChat) args.push('--tg-chat', String(opts.tgChat));

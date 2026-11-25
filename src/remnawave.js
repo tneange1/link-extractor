@@ -1,16 +1,19 @@
 'use strict';
 // Мини-клиент API Remnawave: юзеры по shortUuid и внутренние сквады.
 const API_URL = (process.env.REMNAWAVE_API_URL || 'http://remnawave:3000').replace(/\/+$/, '');
-const API_TOKEN = process.env.REMNAWAVE_API_TOKEN || '';
+let API_TOKEN = process.env.REMNAWAVE_API_TOKEN || '';
 
 const enabled = () => !!API_TOKEN;
+// Токен можно задать из бота/страницы — он перекрывает .env
+function setToken(t) { if (t) API_TOKEN = t; }
+const TOKEN_HINT = 'API-токен Remnawave без нужных прав. Создай новый: панель → Настройки Remnawave → API-токены, и вставь его в экстракторе (Настройки → Токен Remnawave)';
 
-async function call(method, path, body) {
-  if (!API_TOKEN) throw new Error('REMNAWAVE_API_TOKEN не задан в .env');
+async function call(method, path, body, token = API_TOKEN) {
+  if (!token) throw new Error('Не задан API-токен Remnawave (Настройки → Токен Remnawave)');
   const r = await fetch(`${API_URL}${path}`, {
     method,
     headers: {
-      Authorization: `Bearer ${API_TOKEN}`,
+      Authorization: `Bearer ${token}`,
       'Content-Type': 'application/json',
       'X-Forwarded-For': '127.0.0.1',
       'X-Forwarded-Proto': 'https',
@@ -20,6 +23,7 @@ async function call(method, path, body) {
   });
   const text = await r.text();
   let j; try { j = JSON.parse(text); } catch { j = {}; }
+  if (r.status === 401 || r.status === 403) throw new Error(`${TOKEN_HINT} (Remnawave ответил ${r.status})`);
   if (!r.ok) throw new Error(`Remnawave API ${r.status}: ${j.message || text.slice(0, 200)}`);
   return j.response !== undefined ? j.response : j;
 }
@@ -106,4 +110,12 @@ function hostTag(raw) {
   return s || 'VPN';
 }
 
-module.exports = { listProfiles, findStubInbound, renameSquad, uniqueSquadName, enabled, getUserByShortUuid, listSquads, createSquad, deleteSquad, squadName, listInbounds, ensureSquadInbound, listHosts, createHost, updateHost, deleteHosts, setHostsEnabled, hostTag };
+// Проверка токена: нужны права на сквады, хосты и профили
+async function checkToken(token) {
+  await call('GET', '/api/internal-squads', undefined, token);
+  await call('GET', '/api/hosts', undefined, token);
+  await call('GET', '/api/config-profiles', undefined, token);
+  return true;
+}
+
+module.exports = { setToken, checkToken, listProfiles, findStubInbound, renameSquad, uniqueSquadName, enabled, getUserByShortUuid, listSquads, createSquad, deleteSquad, squadName, listInbounds, ensureSquadInbound, listHosts, createHost, updateHost, deleteHosts, setHostsEnabled, hostTag };

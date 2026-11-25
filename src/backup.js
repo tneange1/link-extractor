@@ -1,5 +1,5 @@
 'use strict';
-// Бэкапы данных экстрактора (data/store.json) + бэкапы БД панели, которые кладёт updater.
+// Бэкапы данных экстрактора (data/store.json).
 const fs = require('fs');
 const path = require('path');
 const notify = require('./notify');
@@ -11,14 +11,14 @@ const EVERY_H = Math.max(1, parseInt(process.env.BACKUP_INTERVAL_HOURS || '24', 
 const TO_TG = (process.env.BACKUP_TO_TELEGRAM || 'true') !== 'false';
 const PANEL_NAME = process.env.PANEL_NAME || '';
 
-const NAME_RE = /^(store|panel-db)-\d{8}-\d{6}(-[a-z]+)?\.(json|sql\.gz)$/;
+const NAME_RE = /^store-\d{8}-\d{6}(-[a-z-]+)?\.json$/;
 const stamp = () => new Date().toISOString().replace(/[-:]/g, '').replace('T', '-').slice(0, 15);
 
 function list() {
   try {
     return fs.readdirSync(DIR).filter((n) => NAME_RE.test(n)).map((n) => {
       const st = fs.statSync(path.join(DIR, n));
-      return { name: n, size: st.size, time: st.mtime.toISOString(), kind: n.startsWith('panel-db') ? 'panel-db' : 'store' };
+      return { name: n, size: st.size, time: st.mtime.toISOString(), kind: 'store' };
     }).sort((a, b) => b.time.localeCompare(a.time));
   } catch { return []; }
 }
@@ -55,11 +55,6 @@ function parseRestore(input) {
   return data;
 }
 
-// Запрос бэкапа БД панели: его делает updater (у него есть доступ к docker)
-function requestPanelDb() {
-  fs.mkdirSync(DIR, { recursive: true });
-  fs.writeFileSync(path.join(DIR, '.panel-db-request'), new Date().toISOString());
-}
 
 let timer = null;
 function schedule(getState) {
@@ -74,4 +69,4 @@ function schedule(getState) {
   setTimeout(tick, 30000).unref();
 }
 
-module.exports = { list, create, read, parseRestore, requestPanelDb, schedule, DIR };
+module.exports = { list, create, read, parseRestore, schedule, DIR };

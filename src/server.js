@@ -67,6 +67,11 @@ function readBody(req, limit = 1024 * 1024) {
   });
 }
 
+// ---------- версия и запросы к updater ----------
+const DATA_DIR = process.env.DATA_DIR || path.join(__dirname, '..', 'data');
+function version() { try { return fs.readFileSync(path.join(DATA_DIR, '.updater', 'version'), 'utf8').trim(); } catch { return ''; } }
+function requestFlag(name) { fs.writeFileSync(path.join(DATA_DIR, name), new Date().toISOString()); }
+
 // ---------- админка ----------
 const STATIC = { 'index.html': 'text/html; charset=utf-8', 'inject.js': 'application/javascript; charset=utf-8' };
 let loginFails = 0; let loginBlockedUntil = 0;
@@ -76,6 +81,11 @@ async function handleAdmin(req, res, pathname) {
   if (sub === '/inject.js') {
     const js = fs.readFileSync(path.join(PUBLIC_DIR, 'inject.js'), 'utf8').replace(/__BASE__/g, BASE);
     return send(res, 200, js, STATIC['inject.js'], { 'Cache-Control': 'public, max-age=300' });
+  }
+  // Страница — только на домене панели (на домене подписки остаётся API для бота)
+  const host = String(req.headers['x-forwarded-host'] || req.headers.host || '').split(':')[0].toLowerCase();
+  if (PANEL_DOMAIN && host !== PANEL_DOMAIN && (sub === '/' || sub === '/index.html')) {
+    res.writeHead(302, { Location: `https://${PANEL_DOMAIN}${BASE}/` }); return res.end();
   }
   if (sub === '/' || sub === '/index.html') {
     const html = fs.readFileSync(path.join(PUBLIC_DIR, 'index.html'), 'utf8').replace(/__BASE__/g, BASE);
@@ -109,7 +119,7 @@ async function handleAdmin(req, res, pathname) {
       try { squads = rw.enabled() ? await rw.listSquads() : []; } catch (e) { squadsError = e.message; }
       if (!rw.enabled()) squadsError = 'REMNAWAVE_API_TOKEN не задан — сквады недоступны';
       let inbounds = []; try { inbounds = rw.enabled() ? await rw.listInbounds() : []; } catch (e) { squadsError = squadsError || e.message; }
-      return send(res, 200, { groups: store.groupsSummary(), telegram: notify.enabled(), sources, squads, inbounds, squadsError, uaPresets: store.UA_PRESETS.map(({ id, label, ua }) => ({ id, label, ua })), settings: store.settings(), activeCount: store.totalActive(), activeCheck: ONLY_ACTIVE && rw.enabled() });
+      return send(res, 200, { version: version(), groups: store.groupsSummary(), telegram: notify.enabled(), sources, squads, inbounds, squadsError, uaPresets: store.UA_PRESETS.map(({ id, label, ua }) => ({ id, label, ua })), settings: store.settings(), activeCount: store.totalActive(), activeCheck: ONLY_ACTIVE && rw.enabled() });
     }
     if (route === 'POST /preview') { const { text, userAgent } = await readBody(req); return send(res, 200, await store.preview(text, userAgent || 'auto')); }
     if (route === 'POST /sources') { const b = await readBody(req); return send(res, 200, { created: await store.add(b.text, { title: b.title, userAgent: b.userAgent || 'auto', scope: b.scope || 'new', tag: b.tag }) }); }
@@ -141,7 +151,8 @@ async function handleAdmin(req, res, pathname) {
     }
     if (route === 'GET /backups') return send(res, 200, { backups: backup.list() });
     if (route === 'POST /backups') return send(res, 200, await backup.create(store.exportState(), 'manual', { send: (await readBody(req)).sendTelegram !== false }));
-    if (route === 'POST /backups/panel-db') { backup.requestPanelDb(); return send(res, 200, { ok: true, note: 'Бэкап БД сделает updater в течение минуты и пришлёт в Telegram' }); }
+    if (route === 'POST /update') { requestFlag('.update-request'); return send(res, 200, { ok: true, note: 'Проверю GitHub в течение 30 секунд и пришлю результат в Telegram' }); }
+    if (route === 'POST /update-remnawave') { requestFlag('.remnawave-update-request'); return send(res, 200, { ok: true, note: 'Обновлю образы Remnawave в течение минуты и пришлю результат в Telegram' }); }
     const bm = sub.match(/^\/api\/backups\/([A-Za-z0-9._-]+)$/);
     if (bm && req.method === 'GET') {
       const buf = backup.read(bm[1]);
@@ -152,7 +163,7 @@ async function handleAdmin(req, res, pathname) {
       const data = backup.parseRestore(body.backup || body);
       return send(res, 200, await store.restoreState(data));
     }
-    if (route === 'GET /info') return send(res, 200, { app: 'link-extractor', panel: process.env.PANEL_NAME || '', apiRemnawave: rw.enabled(), telegram: notify.enabled() });
+    if (route === 'GET /info') return send(res, 200, { app: 'link-extractor', panel: process.env.PANEL_NAME || '', version: version(), apiRemnawave: rw.enabled(), telegram: notify.enabled() });
     if (route === 'POST /notify-test') {
       if (!notify.enabled()) return send(res, 400, { error: 'В .env не заданы TG_BOT_TOKEN и TG_CHAT_ID' });
       return (await notify.send('✅ Тестовое уведомление: бот настроен правильно')) ? send(res, 200, { ok: true }) : send(res, 502, { error: 'Telegram не принял сообщение — проверь токен и chat id (бот должен быть в чате)' });

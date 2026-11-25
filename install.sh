@@ -14,7 +14,7 @@ BRANCH="${BRANCH:-main}"
 DIR="${DIR:-/opt/link-extractor}"
 MODE=""; YES=0; DETECT_ONLY=0
 PANEL_NAME=""; RW_TOKEN=""; SUB_DOMAIN=""; PANEL_DOMAIN=""; PROXY="auto"
-TG_TOKEN=""; TG_CHAT=""; TG_ADMINS=""; AUTO_UPDATE="1"; DB_BACKUP="1"; ADMIN_PASSWORD_IN=""
+TG_TOKEN=""; TG_CHAT=""; TG_ADMINS=""; AUTO_UPDATE="1"; ADMIN_PASSWORD_IN=""
 
 while [ $# -gt 0 ]; do
   case "$1" in
@@ -30,7 +30,7 @@ while [ $# -gt 0 ]; do
     --tg-chat) TG_CHAT="$2"; shift 2;;
     --tg-admins) TG_ADMINS="$2"; shift 2;;
     --auto-update) AUTO_UPDATE="$2"; shift 2;;
-    --db-backup) DB_BACKUP="$2"; shift 2;;
+    --db-backup) shift 2;;   # устарело
     --admin-password) ADMIN_PASSWORD_IN="$2"; shift 2;;
     --dir) DIR="$2"; shift 2;;
     --repo) REPO_URL="$2"; shift 2;;
@@ -63,9 +63,6 @@ CADDY_C=""; CADDYFILE=""; NGINX_C=""; NGINX_CONF=""; NGINX_HOSTNET=0; NGINX_HOST
 detect() {
   if has_docker; then
     cont_exists remnawave && cont_exists remnawave-subscription-page && PANEL_HERE=1
-    if [ -z "$RW_TOKEN" ] && cont_exists remnawave-subscription-page; then
-      RW_TOKEN=$(docker inspect -f '{{range .Config.Env}}{{println .}}{{end}}' remnawave-subscription-page | sed -n 's/^REMNAWAVE_API_TOKEN=//p' | head -1)
-    fi
     CADDY_C=$(cont_by_image caddy || true)
     if [ -n "$CADDY_C" ]; then CADDYFILE=$(mount_src "$CADDY_C" /etc/caddy/Caddyfile); fi
     NGINX_C=$(cont_by_image nginx || true)
@@ -118,7 +115,7 @@ if [ "$DETECT_ONLY" = 1 ]; then
   echo "LE_DETECT proxy=$PROXY_KIND"
   echo "LE_DETECT panel_domain=$PANEL_DOMAIN"
   echo "LE_DETECT sub_domain=$SUB_DOMAIN"
-  echo "LE_DETECT api_token=$([ -n "$RW_TOKEN" ] && echo found || echo missing)"
+  echo "LE_DETECT api_token=$([ -n "$(sed -n 's/^REMNAWAVE_API_TOKEN=//p' "$DIR/.env" 2>/dev/null)" ] && echo found || echo missing)"
   echo "LE_DETECT installed=$([ -f "$DIR/.env" ] && echo 1 || echo 0)"
   exit 0
 fi
@@ -178,17 +175,16 @@ set_env COMPOSE_PROFILES "$PROFILES" force
 
 if [ "$WANT_EXTRACTOR" = 1 ]; then
   [ -z "$PANEL_NAME" ] && ask PANEL_NAME "Название панели (для бота и уведомлений)" "${PANEL_DOMAIN:-$(hostname)}"
-  if [ -z "$RW_TOKEN" ] && [ -z "$(get_env REMNAWAVE_API_TOKEN)" ]; then ask RW_TOKEN "API-токен Remnawave (Настройки → API-токены)" ""; fi
+  if [ -z "$RW_TOKEN" ] && [ -z "$(get_env REMNAWAVE_API_TOKEN)" ]; then ask RW_TOKEN "API-токен Remnawave (панель → Настройки Remnawave → API-токены → создать)" ""; fi
   set_env ADMIN_PASSWORD "${ADMIN_PASSWORD_IN:-$(rand 20)}"
   set_env API_TOKEN "$(rand 40)"
   set_env PANEL_NAME "$PANEL_NAME"
   set_env UPSTREAM_URL "http://remnawave-subscription-page:3010"
   set_env REMNAWAVE_API_URL "http://remnawave:3000"
-  [ -n "$RW_TOKEN" ] && set_env REMNAWAVE_API_TOKEN "$RW_TOKEN" force
+  [ -n "$RW_TOKEN" ] && set_env REMNAWAVE_API_TOKEN "$RW_TOKEN" force   # только если токен передали явно
   set_env ONLY_ACTIVE_USERS true
   set_env BASE_PATH /link-extractor
   set_env REFRESH_MINUTES 10
-  set_env BACKUP_PANEL_DB "$([ "$DB_BACKUP" = 1 ] && echo true || echo false)"
 fi
 if [ "$WANT_BOT" = 1 ]; then
   [ -z "$TG_TOKEN" ] && [ -z "$(get_env TG_BOT_TOKEN)" ] && ask TG_TOKEN "Токен бота от @BotFather" ""
@@ -286,7 +282,12 @@ if [ "$WANT_EXTRACTOR" = 1 ]; then
   echo "   Страница:  ${URL:-https://<домен подписки>/link-extractor}/"
   echo "   Пароль:    $(get_env ADMIN_PASSWORD)"
   echo "   API-токен: $(get_env API_TOKEN)   ← для добавления панели в бота"
-  [ -z "$(get_env REMNAWAVE_API_TOKEN)" ] && c_warn "REMNAWAVE_API_TOKEN пуст — впиши его в $DIR/.env и выполни: docker compose up -d"
+  if [ -z "$(get_env REMNAWAVE_API_TOKEN)" ]; then c_warn "Токен Remnawave не задан — укажи его в боте или на странице экстрактора (Настройки → Токен Remnawave)"
+  else
+    sleep 3
+    if docker exec link-extractor node -e "fetch((process.env.REMNAWAVE_API_URL||'http://remnawave:3000')+'/api/internal-squads',{headers:{Authorization:'Bearer '+process.env.REMNAWAVE_API_TOKEN,'X-Forwarded-For':'127.0.0.1','X-Forwarded-Proto':'https'}}).then(r=>process.exit(r.ok?0:3)).catch(()=>process.exit(4))" >/dev/null 2>&1; then c_ok "Токен Remnawave рабочий"
+    else c_warn "Токен Remnawave не подходит (нет прав на сквады/хосты) — создай новый в панели и укажи его в боте или на странице экстрактора"; echo "LE_WARN token"; fi
+  fi
   echo "LE_RESULT url=$URL token=$(get_env API_TOKEN) proxy=${PATCHED:-none} name=$(get_env PANEL_NAME | tr ' ' '_')"
 fi
 [ "$WANT_BOT" = 1 ] && echo "   Бот запущен — напиши ему /start"

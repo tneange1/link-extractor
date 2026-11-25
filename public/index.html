@@ -153,6 +153,17 @@
         <button id="saveSettings">Сохранить</button>
       </div>
       <div class="row" style="margin-bottom:14px">
+        <span class="muted">Токен Remnawave:</span>
+        <input type="password" id="rwToken" style="max-width:340px" placeholder="панель → Настройки Remnawave → API-токены">
+        <button id="saveRwToken">Сохранить токен</button>
+        <span id="rwTokenState" class="muted" style="font-size:12px"></span>
+      </div>
+      <div class="row" style="margin-bottom:14px">
+        <span class="muted">Версия: <b id="ver">—</b></span>
+        <button id="updNow">Обновить экстрактор</button>
+        <button id="updRw">Обновить Remnawave</button>
+      </div>
+      <div class="row" style="margin-bottom:14px">
         <span class="muted">Инбаунд-заглушка для хостов:</span>
         <select id="stubSel" style="min-width:320px"></select>
         <span class="muted" style="font-size:12px">Ключи создаются хостами с этим инбаундом, в подписке заглушка подменяется на настоящий ключ</span>
@@ -226,6 +237,8 @@ async function load() {
   const st = STATE.settings.stubInbound;
   $('stubSel').innerHTML = (st ? '' : `<option value="">— не найден профиль без нод —</option>`) + STATE.inbounds.map((i) => `<option value="${i.uuid}" ${st && st.uuid === i.uuid ? 'selected' : ''}>${esc(i.profileName)} → ${esc(i.tag)} (${esc(i.type)})${i.profileNodes ? ' ⚠ на нодах: ' + i.profileNodes : ''}</option>`).join('');
   $('hostTag').closest('.field').classList.toggle('hidden', !st);
+  $('ver').textContent = STATE.version || '—';
+  $('rwTokenState').innerHTML = STATE.squadsError ? '<span class="err">' + esc(STATE.squadsError) + '</span>' : (STATE.settings.remnawaveTokenSet ? '✅ задан здесь' : '✅ из .env');
   $('grpOn').checked = !!STATE.settings.groupsEnabled;
   $('allName').value = STATE.settings.allGroupName || '';
   $('groupsList').innerHTML = STATE.groups.length ? STATE.groups.map((g) => `<span class="squad ${g.code === 'ALL' ? 'all' : ''}" title="${g.inPanel ? 'есть в панели' : 'ещё не создана в панели'}">${esc(g.name)} · ${g.count}${g.inPanel ? '' : ' ⏳'}</span>`).join('') : '<span class="muted">Групп пока нет</span>';
@@ -347,6 +360,9 @@ $('dbgBtn').onclick = async () => {
   } catch (e) { $('dbgOut').textContent = 'Ошибка: ' + e.message; }
   $('dbgBtn').disabled = false;
 };
+$('saveRwToken').onclick = async () => { const t = $('rwToken').value.trim(); if (!t) return toast('Вставь токен', true); $('saveRwToken').disabled = true; try { await api('/settings', { method: 'POST', body: { remnawaveToken: t } }); $('rwToken').value = ''; toast('Токен подошёл, синхронизирую…'); setTimeout(load, 4000); } catch (e) { toast(e.message, true); } $('saveRwToken').disabled = false; };
+$('updNow').onclick = async () => { try { const r = await api('/update', { method: 'POST' }); toast(r.note); } catch (e) { toast(e.message, true); } };
+$('updRw').onclick = async () => { if (!confirm('Скачать новые образы Remnawave и перезапустить панель? Будет перерыв на ~10–30 секунд.')) return; try { const r = await api('/update-remnawave', { method: 'POST' }); toast(r.note); } catch (e) { toast(e.message, true); } };
 $('grpOn').onchange = async () => { $('grpOn').disabled = true; try { await api('/settings', { method: 'POST', body: { groupsEnabled: $('grpOn').checked } }); toast('Сохранено'); await load(); } catch (e) { toast(e.message, true); } $('grpOn').disabled = false; };
 $('saveAllName').onclick = async () => { try { await api('/settings', { method: 'POST', body: { allGroupName: $('allName').value } }); toast('Сохранено'); await load(); } catch (e) { toast(e.message, true); } };
 $('tgTest').onclick = async () => { try { await api('/notify-test', { method: 'POST' }); toast('Отправлено — проверь Telegram'); } catch (e) { toast(e.message, true); } };

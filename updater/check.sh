@@ -17,7 +17,11 @@ if [ ! -d ./data/.updater ]; then mkdir -p ./data/.updater; echo "[updater] пе
 git fetch -q origin "$BRANCH" || { echo "[updater] git fetch не удался"; exit 1; }
 LOCAL=$(git rev-parse HEAD)
 REMOTE=$(git rev-parse "origin/$BRANCH")
-[ "$LOCAL" = "$REMOTE" ] && exit 0
+git log -1 --format='%h · %cd' --date=format:'%d.%m.%Y %H:%M' > ./data/.updater/version 2>/dev/null || true
+if [ "$LOCAL" = "$REMOTE" ]; then
+  [ -n "$FORCE" ] && tg_msg "ℹ️ Уже последняя версия: <code>$(git rev-parse --short HEAD)</code>"
+  exit 0
+fi
 
 CHANGES=$(git log --format='• %s' "$LOCAL..$REMOTE" | head -15 | sed 's/&/\&amp;/g; s/</\&lt;/g; s/>/\&gt;/g')
 SELF_CHANGED=$(git diff --name-only "$LOCAL" "$REMOTE" | grep -E '^(updater/loop\.sh|docker-compose\.yml)$' || true)
@@ -27,6 +31,7 @@ git reset -q --hard "origin/$BRANCH"
 SERVICES=$(docker compose config --services 2>/dev/null | grep -v '^updater$' | tr '\n' ' ')
 [ -n "$(echo $SERVICES)" ] || SERVICES="link-extractor"
 if docker compose up -d --build $SERVICES; then
+  git log -1 --format='%h · %cd' --date=format:'%d.%m.%Y %H:%M' > ./data/.updater/version 2>/dev/null || true
   tg_msg "✅ Обновлён до <code>$(git rev-parse --short HEAD)</code>
 $CHANGES"
 else

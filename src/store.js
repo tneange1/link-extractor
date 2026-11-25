@@ -36,6 +36,7 @@ function load() {
     state.groups = state.groups || {};
     if (state.settings.groupsEnabled === undefined) state.settings.groupsEnabled = true;
     if (!state.settings.allGroupName) state.settings.allGroupName = '⚡ Авто · все страны';
+    if (state.settings.remnawaveToken) rw.setToken(state.settings.remnawaveToken);
   } catch (e) { console.error('[store] не удалось прочитать', e.message); }
 }
 
@@ -129,6 +130,11 @@ async function migrate() {
       if (src.squadCreated && src.squadUuid && /^3xui\b/i.test(src.squadName || '')) {
         const name = await rw.uniqueSquadName(src.title || String(src.squadName).replace(/^3xui\s*/i, '') || defaultTitle(src), src.squadUuid);
         await rw.renameSquad(src.squadUuid, name); src.squadName = name; changed = true;
+      }
+      if (src.squadError && !src.squadUuid) {
+        // сквад не создался (например, был плохой токен) — пробуем ещё раз
+        src.hostMode = true; src.hostTag = src.hostTag || rw.hostTag(src.title || defaultTitle(src));
+        await applyScope(src, 'new'); src.squadError = undefined; src.enabled = true; changed = true;
       }
       if (!src.hostMode) {
         src.hostMode = true; src.hostTag = rw.hostTag(src.title || src.squadName || defaultTitle(src));
@@ -461,7 +467,7 @@ async function add(text, { title, userAgent = 'auto', scope = 'new', tag } = {})
 }
 
 function list() { return state.sources; }
-function settings() { return state.settings; }
+function settings() { const { remnawaveToken, ...rest } = state.settings; return { ...rest, remnawaveTokenSet: !!remnawaveToken }; }
 
 async function update(id, patch) {
   const s = state.sources.find((x) => x.id === id);
@@ -510,6 +516,13 @@ async function refresh(id) {
 }
 
 async function setSettings(patch) {
+  if (typeof patch.remnawaveToken === 'string' && patch.remnawaveToken.trim()) {
+    const t = patch.remnawaveToken.trim();
+    await rw.checkToken(t); // бросит понятную ошибку, если прав нет
+    state.settings.remnawaveToken = t; rw.setToken(t); save();
+    // после смены токена всё досинхронизируем
+    migrate().then(() => refresh()).catch((e) => console.warn('[token]', e.message));
+  }
   if (patch.stubInbound !== undefined) {
     if (!patch.stubInbound) state.settings.stubInbound = null;
     else {
@@ -528,7 +541,7 @@ async function setSettings(patch) {
   if (m >= 1 && m <= 1440) state.settings.refreshMinutes = m;
   save();
   schedule();
-  return state.settings;
+  return settings();
 }
 
 // Ключи, которые надо дописать юзеру с данными сквадами (null = API недоступен → только «всем»)
