@@ -1,7 +1,8 @@
 'use strict';
 // Уведомления в Telegram: TG_BOT_TOKEN + TG_CHAT_ID (+ TG_THREAD_ID для топика).
 const TOKEN = process.env.TG_BOT_TOKEN || '';
-const CHAT = process.env.TG_CHAT_ID || '';
+// куда слать: TG_CHAT_ID, а если пусто — первому админу из TG_ADMIN_IDS
+const CHAT = process.env.TG_CHAT_ID || String(process.env.TG_ADMIN_IDS || '').split(/[,\s]+/).filter(Boolean)[0] || '';
 const THREAD = process.env.TG_THREAD_ID || '';
 const PANEL = process.env.PANEL_NAME || '';
 const API = (process.env.TG_API_BASE || 'https://api.telegram.org').replace(/\/+$/, '');
