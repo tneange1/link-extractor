@@ -97,6 +97,7 @@ async function sourceScreen(p, s) {
       [btn(src.enabled ? '⛔ Выключить' : '✅ Включить', 'st:toggle'), btn('🔑 Ключи', 'st:keys')],
       src.kind === 'sub' ? [btn('🔄 Обновить', 'st:refresh'), btn('🕵️ User-Agent', 'st:ua')] : [],
       [btn('👥 Кому выдавать', 'st:squad'), btn('🗑 Удалить', 'st:del')],
+      panels.list().length > 1 ? [btn('🌐 На всех панелях', 'st:all')] : [],
       back('src'),
     ].filter((r) => r.length),
   };
@@ -309,6 +310,29 @@ async function onCallback(cq) {
 
     // --- добавить ключи ---
     if (d === 'add') { s.flow = {}; await ask(chatId, s, 'add_text', '📥 <b>Добавить ключи</b>\n\nПришли ключи (<code>vless://</code>, <code>hysteria2://</code>…) и/или ссылки на подписки — по одной на строку. Можно прислать .txt-файл.'); return done(); }
+    if (d.startsWith('ap:')) {
+      const list = panels.list(); const sel = new Set(s.flow?.panelIds || []);
+      const a = d.slice(3);
+      if (a === 'next') { done(); return addAskScope(chatId, s, p); }
+      if (a === 'all') { if (sel.size === list.length) sel.clear(); else list.forEach((x) => sel.add(x.id)); }
+      else { const x = list[Number(a)]; if (x) { if (sel.has(x.id)) sel.delete(x.id); else sel.add(x.id); } }
+      s.flow.panelIds = [...sel];
+      await show(chatId, s, addPanelsScreen(s)); return done();
+    }
+    if (d === 'st:all') { done('Смотрю все панели…'); return show(chatId, s, allPanelsScreen(p, s)); }
+    if (d === 'sa:del') {
+      await show(chatId, s, { text: `🗑 Удалить «${esc(s.twinSrc?.title || s.twinSrc?.squadName || 'источник')}» на всех панелях?\nХосты удалятся везде.`, kb: [[btn('🗑 Удалить + сквады', 'sa:delsq')], [btn('🗑 Удалить, сквады оставить', 'sa:delkeep')], back('st:all')] });
+      return done();
+    }
+    if (d.startsWith('sa:')) {
+      const action = { 'sa:on': 'on', 'sa:off': 'off', 'sa:refresh': 'refresh', 'sa:copy': 'copy', 'sa:delsq': 'delsq', 'sa:delkeep': 'del' }[d];
+      if (!action) return done();
+      done('Выполняю на всех панелях…');
+      const out = await twinsDo(chatId, s, action);
+      await tg.send(chatId, out.join('\n') || 'Нечего делать');
+      if (action.startsWith('del')) return fresh(chatId, s, sourcesScreen(p, s));
+      return fresh(chatId, s, allPanelsScreen(p, s));
+    }
     if (d === 'add:ua') { const st = await panels.api(p, 'GET', '/state'); await show(chatId, s, uaPicker(st, s, 'add')); return done(); }
     if (d === 'add:skip') { s.flow.title = ''; done(); return addAskScope(chatId, s, p); }
 
@@ -433,26 +457,106 @@ async function addPreview(chatId, s, p) {
   s.msgId = m.message_id;
 }
 
+// после названия: если панелей больше одной — спрашиваем, в какие добавить
+function addPanelsScreen(s) {
+  const sel = new Set(s.flow.panelIds);
+  const list = panels.list();
+  const rows = list.map((x, i) => [btn(`${sel.has(x.id) ? '✅' : '⬜'} ${x.name}`, `ap:${i}`)]);
+  rows.push([btn(sel.size === list.length ? '⬜ Снять все' : '☑️ Во все панели', 'ap:all')]);
+  if (sel.size) rows.push([btn(`➡️ Далее (${sel.size})`, 'ap:next')]);
+  rows.push([btn('✖️ Отмена', 'x')]);
+  return { text: '🖥 <b>В какие панели добавить?</b>\nНа каждой панели будет свой сквад и свои хосты.', kb: rows };
+}
+
 async function addAskScope(chatId, s, p) {
   s.step = null;
-  const st = await panels.api(p, 'GET', '/state');
+  if (!s.flow.panelIds) {
+    s.flow.panelIds = [p.id];
+    if (panels.list().length > 1) return fresh(chatId, s, addPanelsScreen(s));
+  }
+  if (s.flow.panelIds.length > 1) {
+    // в нескольких панелях сквады разные — только «новый сквад» или «всем»
+    s.pick = 'add'; s.squadChoices = ['new', 'all'];
+    return fresh(chatId, s, { text: `👥 <b>Кому выдавать ключи?</b> (панелей: ${s.flow.panelIds.length})\nНовый сквад создастся на каждой панели — потом добавь в него юзеров.`,
+      kb: [[btn('🆕 Создать сквад из названия', 'sq:0')], [btn('🌐 Всем пользователям', 'sq:1')], [btn('✖️ Отмена', 'x')]] });
+  }
+  const target = panels.get(s.flow.panelIds[0]) || p;
+  const st = await panels.api(target, 'GET', '/state');
   await fresh(chatId, s, squadPicker(st, s, 'add'));
 }
 
 async function addCommit(chatId, s, p) {
-  const m = await tg.send(chatId, '⏳ Добавляю: создаю сквад и хосты…');
-  const r = await panels.api(p, 'POST', '/sources', { text: s.flow.text, title: s.flow.title, userAgent: s.flow.userAgent || 'auto', scope: s.flow.scope }, { timeout: 300000 });
+  const targets = (s.flow.panelIds || [p.id]).map((id) => panels.get(id)).filter(Boolean);
+  const m = await tg.send(chatId, `⏳ Добавляю${targets.length > 1 ? ` в ${targets.length} панели` : ''}: создаю сквады и хосты…`);
   const lines = ['✅ <b>Добавлено</b>', ''];
-  for (const c of r.created) {
-    lines.push(`• ${esc(c.title || c.squadName || 'источник')}: ${keysWord((c.links || []).length)}${c.squadName ? ` · сквад <b>${esc(c.squadName)}</b>` : c.scope === 'all' ? ' · всем' : ''}`);
-    if (c.error) lines.push(`  ⚠️ ${esc(c.error)}`);
-    if (c.squadError) lines.push(`  ⚠️ ${esc(c.squadError)}`);
-    if (c.hostError) lines.push(`  ⚠️ ${esc(c.hostError)}`);
+  let anySquad = false;
+  const results = await Promise.all(targets.map(async (t) => {
+    try { return { t, r: await panels.api(t, 'POST', '/sources', { text: s.flow.text, title: s.flow.title, userAgent: s.flow.userAgent || 'auto', scope: s.flow.scope }, { timeout: 300000 }) }; }
+    catch (e) { return { t, e }; }
+  }));
+  for (const { t, r, e } of results) {
+    if (targets.length > 1) lines.push(`🖥 <b>${esc(t.name)}</b>`);
+    if (e) { lines.push(`  ❌ ${esc(e.message)}`); continue; }
+    for (const c of r.created) {
+      if (c.squadCreated) anySquad = true;
+      lines.push(`  • ${esc(c.title || c.squadName || 'источник')}: ${keysWord((c.links || []).length)}${c.squadName ? ` · сквад <b>${esc(c.squadName)}</b>` : c.scope === 'all' ? ' · всем' : ''}`);
+      for (const er of [c.error, c.squadError, c.hostError].filter(Boolean)) lines.push(`    ⚠️ ${esc(er)}`);
+    }
+    if (!r.created.length) lines.push('  Ничего нового (такая подписка уже добавлена?)');
   }
-  if (!r.created.length) lines.push('Ничего нового (такая подписка уже добавлена?).');
-  if (r.created.some((c) => c.squadCreated)) lines.push('', '👉 Добавь юзеров в новый сквад: панель → Внутренние сквады.');
+  if (anySquad) lines.push('', '👉 Добавь юзеров в новые сквады: панель → Внутренние сквады.');
   s.flow = null;
   await tg.edit(chatId, m.message_id, lines.join('\n'), [[btn('📚 Источники', 'src'), btn('« К панели', `p:${p.id}`)]]);
+}
+
+// ---------- один и тот же источник на разных панелях ----------
+const srcKey = (x) => (x.kind === 'sub' ? `sub:${x.input}` : `keys:${[...(x.links || [])].sort().join('\n')}`);
+
+async function findTwins(src) {
+  const key = srcKey(src);
+  return Promise.all(panels.list().map(async (pp) => {
+    try {
+      const st = await panels.api(pp, 'GET', '/state', undefined, { timeout: 20000 });
+      return { panel: pp, src: st.sources.find((x) => srcKey(x) === key) || null };
+    } catch (e) { return { panel: pp, src: null, error: e.message }; }
+  }));
+}
+
+async function allPanelsScreen(p, s) {
+  const { src } = await getSource(p, s);
+  s.twinSrc = src;
+  const tw = await findTwins(src);
+  s.twins = tw;
+  const lines = [`🌐 <b>${esc(src.title || src.squadName || 'Источник')} на всех панелях</b>`, ''];
+  for (const t of tw) lines.push(`${t.error ? '⚠️' : !t.src ? '➖' : t.src.enabled ? '✅' : '⛔'} ${esc(t.panel.name)}${t.src ? ` · ${keysWord(t.src.nodes.length)}${t.src.squadName ? ` · ${esc(t.src.squadName)}` : ''}` : t.error ? ` · недоступна` : ' · нет'}`);
+  const missing = tw.filter((t) => !t.src && !t.error).length;
+  const kb = [[btn('✅ Включить везде', 'sa:on'), btn('⛔ Выключить везде', 'sa:off')]];
+  if (src.kind === 'sub') kb.push([btn('🔄 Обновить везде', 'sa:refresh')]);
+  if (missing) kb.push([btn(`➕ Добавить в остальные (${missing})`, 'sa:copy')]);
+  kb.push([btn('🗑 Удалить везде', 'sa:del')], back('st:back'));
+  return { text: lines.join('\n'), kb };
+}
+
+async function twinsDo(chatId, s, action) {
+  const tw = s.twins || []; const src = s.twinSrc;
+  const out = [];
+  await Promise.all(tw.map(async (t) => {
+    try {
+      if (action === 'copy') {
+        if (t.src || t.error) return;
+        const text = src.kind === 'sub' ? src.input : (src.links || []).join('\n');
+        const r = await panels.api(t.panel, 'POST', '/sources', { text, title: src.title || src.squadName || '', userAgent: src.userAgent || 'auto', scope: src.scope === 'all' ? 'all' : 'new' }, { timeout: 300000 });
+        out.push(`➕ ${esc(t.panel.name)}: ${r.created.map((c) => c.squadName || 'всем').join(', ') || 'уже есть'}`);
+        return;
+      }
+      if (!t.src) return;
+      if (action === 'on' || action === 'off') await panels.api(t.panel, 'PATCH', `/sources/${t.src.id}`, { enabled: action === 'on' });
+      if (action === 'refresh') await panels.api(t.panel, 'POST', '/refresh', { id: t.src.id }, { timeout: 120000 });
+      if (action === 'del' || action === 'delsq') await panels.api(t.panel, 'DELETE', `/sources/${t.src.id}${action === 'delsq' ? '?deleteSquad=1' : ''}`);
+      out.push(`✅ ${esc(t.panel.name)}`);
+    } catch (e) { out.push(`❌ ${esc(t.panel.name)}: ${esc(e.message)}`); }
+  }));
+  return out;
 }
 
 async function checkRun(chatId, s, p, ua) {

@@ -174,7 +174,14 @@ function extractLinksFromText(text) {
     try { const dec = b64decode(body); const c2 = linksFromConfig(dec); if (c2 && c2.length) return [...new Set(c2)]; } catch { /* ignore */ }
   }
   const re = new RegExp(`(?:${SUPPORTED.join('|')})://[^\\s"'<>\`]+`, 'gi');
-  let found = body.match(re) || [];
+  let found = [];
+  // строка с одним ключом целиком — название после # может содержать пробелы
+  for (const line of body.split(/\r?\n/)) {
+    const l = line.trim();
+    const m = l.match(re);
+    if (!m) continue;
+    if (m.length === 1 && l.startsWith(m[0])) found.push(l); else found.push(...m);
+  }
   if (!found.length && looksLikeBase64(body)) {
     try {
       const dec = b64decode(body);
