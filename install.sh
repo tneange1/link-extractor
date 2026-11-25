@@ -29,7 +29,7 @@ while [ $# -gt 0 ]; do
     --tg-token) TG_TOKEN="$2"; shift 2;;
     --tg-chat) TG_CHAT="$2"; shift 2;;
     --tg-admins) TG_ADMINS="$2"; shift 2;;
-    --auto-update) AUTO_UPDATE="$2"; shift 2;;
+    --auto-update) AUTO_UPDATE="$2"; AUTO_UPDATE_GIVEN=1; shift 2;;
     --db-backup) shift 2;;   # устарело
     --admin-password) ADMIN_PASSWORD_IN="$2"; shift 2;;
     --dir) DIR="$2"; shift 2;;
@@ -174,36 +174,52 @@ OLD_PROFILES=$(get_env COMPOSE_PROFILES)
 for p in $(echo "$OLD_PROFILES" | tr ',' ' '); do case ",$PROFILES," in *",$p,"*) ;; *) PROFILES="$PROFILES,$p";; esac; done
 set_env COMPOSE_PROFILES "$PROFILES" force
 
+jesc() { printf '%s' "$1" | sed 's/\\/\\\\/g; s/"/\\"/g'; }
 if [ "$WANT_EXTRACTOR" = 1 ]; then
-  [ -z "$PANEL_NAME" ] && ask PANEL_NAME "Название панели (для бота и уведомлений)" "${PANEL_DOMAIN:-$(hostname)}"
-  if [ -z "$RW_TOKEN" ] && [ -z "$(get_env REMNAWAVE_API_TOKEN)" ]; then ask RW_TOKEN "API-токен Remnawave (панель → Настройки Remnawave → API-токены → создать)" ""; fi
-  set_env ADMIN_PASSWORD "${ADMIN_PASSWORD_IN:-$(rand 20)}"
-  set_env API_TOKEN "$(rand 40)"
-  set_env PANEL_NAME "$PANEL_NAME"
-  set_env UPSTREAM_URL "http://remnawave-subscription-page:3010"
-  set_env REMNAWAVE_API_URL "http://remnawave:3000"
-  [ -n "$RW_TOKEN" ] && set_env REMNAWAVE_API_TOKEN "$RW_TOKEN" force   # только если токен передали явно
-  set_env ONLY_ACTIVE_USERS true
-  set_env BASE_PATH /link-extractor
-  set_env REFRESH_MINUTES 10
+  # название спрашиваем только при первой установке (дальше меняется в боте)
+  [ -z "$PANEL_NAME" ] && [ ! -f data/store.json ] && ask PANEL_NAME "Название панели (для бота и уведомлений)" "${PANEL_DOMAIN:-$(hostname)}"
+  if [ -z "$RW_TOKEN" ] && [ ! -f data/store.json ] && [ -z "$(get_env REMNAWAVE_API_TOKEN)" ]; then
+    ask RW_TOKEN "API-токен Remnawave (панель → Настройки Remnawave → API-токены → создать; можно позже в боте)" ""
+  fi
+  # всё, кроме токена бота и id админа, уходит в базу экстрактора через bootstrap.json
+  {
+    FIRST=1; [ -f data/store.json ] && FIRST=0
+    printf '{"settings":{"_installer":true'
+    { [ "$FIRST" = 1 ] || [ -n "${AUTO_UPDATE_GIVEN:-}" ]; } && printf ',"autoUpdate":%s' "$([ "$AUTO_UPDATE" = 1 ] && echo true || echo false)"
+    [ -n "$PANEL_NAME" ] && printf ',"panelName":"%s"' "$(jesc "$PANEL_NAME")"
+    [ -n "$RW_TOKEN" ] && printf ',"remnawaveToken":"%s"' "$(jesc "$RW_TOKEN")"
+    [ -n "$ADMIN_PASSWORD_IN" ] && printf '},"secrets":{"adminPassword":"%s"' "$(jesc "$ADMIN_PASSWORD_IN")"
+    printf '}}\n'
+  } > data/bootstrap.json
+  chown 1000:1000 data/bootstrap.json
 fi
 if [ "$WANT_BOT" = 1 ]; then
   [ -z "$TG_TOKEN" ] && [ -z "$(get_env TG_BOT_TOKEN)" ] && ask TG_TOKEN "Токен бота от @BotFather" ""
   [ -z "$TG_ADMINS" ] && [ -z "$(get_env TG_ADMIN_IDS)" ] && ask TG_ADMINS "Твой Telegram id (узнать: @userinfobot), можно несколько через запятую" ""
   [ -z "$(get_env TG_BOT_TOKEN)$TG_TOKEN" ] && die "Без токена бота не поставить"
   [ -z "$(get_env TG_ADMIN_IDS)$TG_ADMINS" ] && die "Нужен хотя бы один id админа"
-  [ -z "$TG_CHAT" ] && TG_CHAT="${TG_ADMINS%%,*}"
 fi
+# экстрактор без бота шлёт уведомления админу (--tg-chat), куда — потом меняется в боте командой /bind
+[ -z "$TG_ADMINS" ] && [ -n "$TG_CHAT" ] && TG_ADMINS="$TG_CHAT"
 [ -n "$TG_TOKEN" ] && set_env TG_BOT_TOKEN "$TG_TOKEN" force
-[ -n "$TG_CHAT" ] && set_env TG_CHAT_ID "$TG_CHAT" force
 [ -n "$TG_ADMINS" ] && set_env TG_ADMIN_IDS "$TG_ADMINS" force
-set_env AUTO_UPDATE "$([ "$AUTO_UPDATE" = 1 ] && echo true || echo false)"
-set_env UPDATE_INTERVAL_MINUTES 10
-set_env UPDATE_BRANCH "$BRANCH"
-set_env BACKUP_INTERVAL_HOURS 24
-set_env BACKUP_KEEP 14
-set_env BACKUP_TO_TELEGRAM true
 chmod 600 .env
+
+# API экстрактора изнутри контейнера (токен берётся из его базы)
+le_api() { # le_api METHOD PATH [JSON]
+  docker exec -e M="$1" -e P="$2" -e B="${3:-}" link-extractor node -e '
+    const t = require("/app/data/store.json").secrets.apiToken;
+    fetch("http://127.0.0.1:3020/link-extractor/api" + process.env.P, { method: process.env.M, headers: { Authorization: "Bearer " + t, "Content-Type": "application/json" }, body: process.env.B || undefined })
+      .then((r) => r.text()).then((x) => { console.log(x); }).catch((e) => { console.error(e.message); process.exit(1); });' 2>/dev/null
+}
+wait_extractor() {
+  for i in $(seq 1 40); do
+    docker exec link-extractor node -e 'process.exit(require("/app/data/store.json").secrets.apiToken ? 0 : 1)' >/dev/null 2>&1 && return 0
+    sleep 2
+  done
+  return 1
+}
+json_get() { sed -n "s/.*\"$1\":\"\([^\"]*\)\".*/\1/p" | head -1; }
 
 # ---------- reverse proxy ----------
 PATCHED=""
@@ -224,7 +240,7 @@ patch_caddy() {
         print ind "handle {"; print ind "    " substr($0, RLENGTH+1); print ind "}"
         done=1; next }
       {print}' D="$PANEL_DOMAIN" "$tmp" > "$tmp.2" && mv "$tmp.2" "$tmp"
-    set_env PANEL_DOMAIN "$PANEL_DOMAIN" force
+    SET_PANEL_DOMAIN=1
   fi
   cat "$tmp" > "$f"; rm -f "$tmp"   # cat >, чтобы не сломать bind-mount файла
   if docker exec "$CADDY_C" caddy validate --config /etc/caddy/Caddyfile --adapter caddyfile >/dev/null 2>&1 \
@@ -273,23 +289,35 @@ if [ "$WANT_EXTRACTOR" = 1 ] && [ "$PROXY" = auto ]; then
   else c_warn "Caddy/nginx не найден — настрой reverse proxy вручную по README"; fi
 fi
 
-[ -n "$PATCHED" ] && docker compose up -d >/dev/null 2>&1 || true   # подхватить PANEL_DOMAIN / порт
-
 # ---------- итог ----------
 echo
-c_ok "Готово: $DIR (профили: $PROFILES)"
 if [ "$WANT_EXTRACTOR" = 1 ]; then
-  URL=""; [ -n "$SUB_DOMAIN" ] && URL="https://$SUB_DOMAIN/link-extractor"
-  echo "   Страница:  ${URL:-https://<домен подписки>/link-extractor}/"
-  echo "   Пароль:    $(get_env ADMIN_PASSWORD)"
-  echo "   API-токен: $(get_env API_TOKEN)   ← для добавления панели в бота"
-  if [ -z "$(get_env REMNAWAVE_API_TOKEN)" ]; then c_warn "Токен Remnawave не задан — укажи его в боте или на странице экстрактора (Настройки → Токен Remnawave)"
-  else
-    sleep 3
-    if docker exec link-extractor node -e "fetch((process.env.REMNAWAVE_API_URL||'http://remnawave:3000')+'/api/internal-squads',{headers:{Authorization:'Bearer '+process.env.REMNAWAVE_API_TOKEN,'X-Forwarded-For':'127.0.0.1','X-Forwarded-Proto':'https'}}).then(r=>process.exit(r.ok?0:3)).catch(()=>process.exit(4))" >/dev/null 2>&1; then c_ok "Токен Remnawave рабочий"
-    else c_warn "Токен Remnawave не подходит (нет прав на сквады/хосты) — создай новый в панели и укажи его в боте или на странице экстрактора"; echo "LE_WARN token"; fi
+  wait_extractor || die "Экстрактор не запустился — смотри: docker logs link-extractor"
+  [ -n "${SET_PANEL_DOMAIN:-}" ] && le_api POST /settings "{\"panelDomain\":\"$PANEL_DOMAIN\"}" >/dev/null
+  # старые установки: всё из .env уже перенесено в базу — оставляем в .env только нужное
+  if grep -qE '^(ADMIN_PASSWORD|API_TOKEN|REMNAWAVE_API_TOKEN|PANEL_NAME|PANEL_DOMAIN)=' .env; then
+    cp .env ".env.bak-$(date +%Y%m%d-%H%M%S)"
+    grep -E '^(COMPOSE_PROFILES|TG_BOT_TOKEN|TG_ADMIN_IDS)=' .env > .env.min; cat .env.min > .env; rm -f .env.min
+    docker compose up -d >/dev/null 2>&1 || true
+    wait_extractor || true
+    c_ok "Настройки перенесены из .env в базу (старый .env сохранён рядом)"
   fi
-  echo "LE_RESULT url=$URL token=$(get_env API_TOKEN) proxy=${PATCHED:-none} name=$(get_env PANEL_NAME | tr ' ' '_')"
+  SEC=$(le_api GET /secrets)
+  STATE=$(le_api GET /state)
+  if echo "$STATE" | grep -q '"squadsError":"'; then
+    c_warn "Токен Remnawave: $(echo "$STATE" | json_get squadsError)"
+    echo "LE_WARN token"
+  else c_ok "Токен Remnawave рабочий"; fi
+  URL=""; [ -n "$SUB_DOMAIN" ] && URL="https://$SUB_DOMAIN/link-extractor"
+  c_ok "Готово: $DIR (профили: $PROFILES)"
+  PAGE="${URL:-https://<домен подписки>/link-extractor}/"; [ -n "$PANEL_DOMAIN" ] && PAGE="https://$PANEL_DOMAIN/link-extractor/"
+  echo "   Страница:  $PAGE"
+  echo "   Пароль:    $(echo "$SEC" | json_get adminPassword)"
+  echo "   Остальные настройки — в боте (или на странице), в .env только токен бота и id админа."
+    NAME_NOW=$(echo "$STATE" | json_get panelName)
+  echo "LE_RESULT url=$URL token=$(echo "$SEC" | json_get apiToken) proxy=${PATCHED:-none} name=$(echo "${NAME_NOW:-$PANEL_NAME}" | tr ' ' '_')"
+else
+  c_ok "Готово: $DIR (профили: $PROFILES)"
 fi
 [ "$WANT_BOT" = 1 ] && echo "   Бот запущен — напиши ему /start"
 exit 0

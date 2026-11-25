@@ -1,5 +1,7 @@
 #!/bin/sh
 # Раз в 30 секунд: автообновление по расписанию или по кнопке из бота/страницы.
+# настройки из базы экстрактора (бот/страница) перекрывают .env
+if [ -f ./data/updater-settings.env ]; then set -a; . ./data/updater-settings.env; set +a; fi
 STATE=./data/.updater
 mkdir -p "$STATE"
 now=$(date +%s)

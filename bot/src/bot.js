@@ -22,7 +22,7 @@ function mainScreen() {
   const list = panels.list();
   const rows = list.map((p) => [btn(`🖥 ${p.name}`, `p:${p.id}`)]);
   rows.push([btn('➕ Добавить панель', 'np'), btn('🛠 Установить на сервер', 'inst')]);
-  rows.push([btn('❓ Помощь', 'help')]);
+  rows.push([btn('💾 Бэкап бота', 'bb'), btn('❓ Помощь', 'help')]);
   const text = list.length
     ? `🔗 <b>Link Extractor</b>\n\nПанелей: ${list.length}. Выбери панель для управления.`
     : '🔗 <b>Link Extractor</b>\n\nПанелей пока нет.\n• <b>Установить на сервер</b> — бот сам поставит экстрактор на сервер с Remnawave по SSH.\n• <b>Добавить панель</b> — если экстрактор уже стоит (нужен адрес и API-токен из .env).';
@@ -168,8 +168,12 @@ function notifyLine(st) {
 async function settingsScreen(p) {
   const st = await panels.api(p, 'GET', '/state');
   return {
-    text: ['⚙️ <b>Настройки</b>', '', `🔄 Обновление подписок: каждые <b>${st.settings.refreshMinutes}</b> мин`, `🧩 Инбаунд-заглушка: ${st.settings.stubInbound ? esc(`${st.settings.stubInbound.profileName || ''} → ${st.settings.stubInbound.tag}`) : '—'}`, `🔑 Токен Remnawave: ${st.squadsError ? `⚠️ ${esc(st.squadsError)}` : 'работает'}`, notifyLine(st)].join('\n'),
-    kb: [[btn('🔄 Интервал обновления', 'set:refresh')], [btn('🧩 Инбаунд-заглушка', 'set:stub')], [btn('🔑 Токен Remnawave', 'set:rwtoken')], [btn('🔔 Куда слать уведомления', 'set:notify')], [btn('🔔 Тест уведомления', 'set:test')], back(`p:${p.id}`)],
+    text: ['⚙️ <b>Настройки</b>', '', `🔄 Обновление подписок: каждые <b>${st.settings.refreshMinutes}</b> мин`, `🧩 Инбаунд-заглушка: ${st.settings.stubInbound ? esc(`${st.settings.stubInbound.profileName || ''} → ${st.settings.stubInbound.tag}`) : '—'}`, `🔑 Токен Remnawave: ${st.squadsError ? `⚠️ ${esc(st.squadsError)}` : 'работает'}`, notifyLine(st), `🌐 Домен панели: ${esc(st.settings.panelDomain || '—')}`].join('\n'),
+    kb: [[btn('🔄 Интервал обновления', 'set:refresh')], [btn('🧩 Инбаунд-заглушка', 'set:stub')], [btn('🔑 Токен Remnawave', 'set:rwtoken')], [btn('🔔 Куда слать уведомления', 'set:notify')],
+      [btn('🌐 Домен панели', 'set:domain'), btn('🔐 Пароль страницы', 'set:pass')],
+      [btn(`${st.settings.autoUpdate !== false ? '✅' : '⬜'} Автообновление экстрактора`, 'set:t:autoUpdate')],
+      [btn(`${st.settings.remnawaveAutoUpdate ? '✅' : '⬜'} Автообновление Remnawave`, 'set:t:remnawaveAutoUpdate')],
+      [btn(`💾 Бэкап каждые ${st.settings.backupHours || 24} ч`, 'set:backupH')], [btn('🔔 Тест уведомления', 'set:test')], back(`p:${p.id}`)],
   };
 }
 
@@ -217,6 +221,34 @@ async function onCallback(cq) {
     if (d === 'pren') { await ask(chatId, s, 'pren_name', '✏️ Новое название панели:'); return done(); }
     if (d === 'pdel') { await show(chatId, s, { text: `Убрать «${esc(panelOf(s).name)}» из бота?\nНа сервере ничего не удалится.`, kb: [[btn('🗑 Да, убрать', 'pdel:yes')], back(`p:${s.panel}`)] }); return done(); }
     if (d === 'pdel:yes') { panels.remove(s.panel); s.panel = null; await show(chatId, s, mainScreen()); return done('Убрано'); }
+
+    if (d === 'bb') {
+      const st = panels.settings();
+      await show(chatId, s, { text: ['💾 <b>Бэкап бота</b>', '', 'Один файл: список панелей с токенами, настройки бота и свежие данные каждой панели (источники, ключи, сквады, хосты, настройки).',
+        `Автоматически каждые ${st.backupHours} ч — сюда.${st.lastBackupAt ? `\nПоследний: ${new Date(st.lastBackupAt).toLocaleString('ru-RU')}` : ''}`, '', '🔒 В файле токены и пароли — не пересылай его никому.'].join('\n'),
+      kb: [[btn('💾 Сделать сейчас', 'bb:make')], [btn('♻️ Восстановить из файла', 'bb:restore')], [btn(`⏱ Интервал: ${st.backupHours} ч`, 'bb:interval')], back('m')] });
+      return done();
+    }
+    if (d === 'bb:make') { done('Собираю бэкап…'); await sendBotBackup(chatId, 'manual'); return fresh(chatId, s, mainScreen()); }
+    if (d === 'bb:restore') { await ask(chatId, s, 'bb_restore', '♻️ Пришли файл бэкапа бота (<code>bot-backup-….json</code>).'); return done(); }
+    if (d === 'bb:interval') { s.flow = null; await ask(chatId, s, 'bb_interval', '⏱ Как часто делать автобэкап бота (в часах, 1–720)?'); return done(); }
+    if (d.startsWith('bb:yes:')) {
+      const j = s.flow?.bb; if (!j) return done('Пришли файл заново', true);
+      done('Восстанавливаю…');
+      panels.importDb(j.db);
+      const lines = [`✅ Список панелей восстановлен: ${j.db.panels.length}`];
+      if (d === 'bb:yes:all') {
+        for (const p2 of panels.list()) {
+          const data = j.extractors?.[p2.id];
+          if (!data) continue;
+          try { const r = await panels.api(p2, 'POST', '/restore', { backup: data }, { timeout: 300000 }); lines.push(`♻️ ${esc(p2.name)}: источников ${r.sources}`); }
+          catch (e) { lines.push(`❌ ${esc(p2.name)}: ${esc(e.message)}`); }
+        }
+      }
+      s.flow = null;
+      await tg.send(chatId, lines.join('\n'));
+      return fresh(chatId, s, mainScreen());
+    }
 
     const needPanel = !['inst'].some((x) => d.startsWith(x)) && !d.startsWith('i:');
     const p = needPanel ? panelOf(s) : null;
@@ -316,6 +348,22 @@ async function onCallback(cq) {
       await panels.api(p, 'POST', '/settings', d === 'set:notify:me' ? { notifyChatId: String(chatId), notifyThreadId: '' } : { notifyChatId: '' });
       await show(chatId, s, settingsScreen(p)); return done('Сохранено');
     }
+    if (d === 'set:domain') { await ask(chatId, s, 'set_domain', '🌐 Домен панели Remnawave (например <code>panel.example.com</code>). Нужен, чтобы в меню панели появился «Экстрактор ссылок» (Caddy):'); return done(); }
+    if (d === 'set:backupH') { await ask(chatId, s, 'set_backupH', '💾 Как часто делать автобэкап (в часах, 1–720)?'); return done(); }
+    if (d.startsWith('set:t:')) {
+      const k = d.slice(6); const st = await panels.api(p, 'GET', '/state');
+      const cur = k === 'autoUpdate' ? st.settings.autoUpdate !== false : !!st.settings[k];
+      if (k === 'remnawaveAutoUpdate' && !cur && s.confirmRw !== p.id) { s.confirmRw = p.id; return done('Панель будет сама обновляться и перезапускаться. Нажми ещё раз, чтобы включить', true); }
+      s.confirmRw = null;
+      await panels.api(p, 'POST', '/settings', { [k]: !cur });
+      await show(chatId, s, settingsScreen(p)); return done('Сохранено');
+    }
+    if (d === 'set:pass') {
+      const sec = await panels.api(p, 'GET', '/secrets');
+      await show(chatId, s, { text: `🔐 <b>Пароль страницы экстрактора</b>\n\n<tg-spoiler>${esc(sec.adminPassword)}</tg-spoiler>\n\nСтраница: <code>${esc(p.url)}/</code>`, kb: [[btn('🔄 Сменить пароль', 'set:pass:new')], back('set')] });
+      return done();
+    }
+    if (d === 'set:pass:new') { await panels.api(p, 'POST', '/settings', { regeneratePassword: true }); await show(chatId, s, { text: '✅ Пароль сменён.', kb: [[btn('🔐 Показать', 'set:pass')], back('set')] }); return done(); }
     if (d === 'set:rwtoken') { await ask(chatId, s, 'set_rwtoken', '🔑 Пришли API-токен Remnawave.\nГде взять: панель → Настройки Remnawave → API-токены → создать. Сообщение сразу удалю.'); return done(); }
     if (d.startsWith('bk:get:')) {
       const name = s.backups?.[Number(d.slice(7))];
@@ -548,11 +596,16 @@ async function onMessage(msg) {
 
   const step = s.step;
   const secret = ['i_pass', 'i_key', 'i_passphrase', 'i_rwtoken', 'np_token', 'set_rwtoken'].includes(step);
+  if (!s.panel && !step?.startsWith('np_') && !step?.startsWith('i_') && !step?.startsWith('bb_') && step) { s.step = null; return fresh(chatId, s, mainScreen()); }
   if (secret) await tg.del(chatId, msg.message_id);
   if (!step) return fresh(chatId, s, mainScreen());
 
   try {
     // панели
+    if (step === 'bb_interval') {
+      const n = parseInt(text, 10); if (!(n >= 1 && n <= 720)) return tg.send(chatId, 'Число от 1 до 720.');
+      panels.setSetting('backupHours', n); s.step = null; return fresh(chatId, s, mainScreen());
+    }
     if (step === 'np_url') { s.flow.url = text; return ask(chatId, s, 'np_token', '🔑 Пришли <b>API_TOKEN</b> из <code>/opt/link-extractor/.env</code> (или ADMIN_PASSWORD). Сообщение сразу удалю.'); }
     if (step === 'np_token') {
       const probe = { id: 'probe', name: 'панель', url: panels.normUrl(s.flow.url), token: text };
@@ -565,7 +618,7 @@ async function onMessage(msg) {
       s.step = null; s.flow = null; s.panel = p.id;
       return fresh(chatId, s, panelScreen(p));
     }
-    if (step === 'pren_name') { panels.rename(s.panel, text); s.step = null; return fresh(chatId, s, panelScreen(panelOf(s))); }
+    if (step === 'pren_name') { panels.rename(s.panel, text); await panels.api(panelOf(s), 'POST', '/settings', { panelName: text }).catch(() => {}); s.step = null; return fresh(chatId, s, panelScreen(panelOf(s))); }
 
     const p = s.panel ? panels.get(s.panel) : null;
     // ключи
@@ -588,6 +641,20 @@ async function onMessage(msg) {
       const n = parseInt(text, 10);
       if (!(n >= 1 && n <= 1440)) return tg.send(chatId, 'Число от 1 до 1440.');
       s.step = null; await panels.api(p, 'POST', '/settings', { refreshMinutes: n }); return fresh(chatId, s, settingsScreen(p));
+    }
+    if (step === 'set_domain') { s.step = null; await panels.api(p, 'POST', '/settings', { panelDomain: text }); return fresh(chatId, s, settingsScreen(p)); }
+    if (step === 'set_backupH') {
+      const n = parseInt(text, 10); if (!(n >= 1 && n <= 720)) return tg.send(chatId, 'Число от 1 до 720.');
+      s.step = null; await panels.api(p, 'POST', '/settings', { backupHours: n }); return fresh(chatId, s, settingsScreen(p));
+    }
+    if (step === 'bb_restore') {
+      if (!msg.document) return tg.send(chatId, 'Пришли именно файл бэкапа бота (.json).');
+      const j = JSON.parse((await tg.download(msg.document.file_id)).toString('utf8'));
+      if (j.app !== 'link-extractor-bot' || !j.db) return tg.send(chatId, '❌ Это не бэкап бота. Бэкап одной панели восстанавливается в меню панели → Бэкапы.');
+      s.flow = { bb: j }; s.step = null;
+      const n = Object.keys(j.extractors || {}).length;
+      return fresh(chatId, s, { text: `♻️ Бэкап бота от ${new Date(j.createdAt).toLocaleString('ru-RU')}: панелей ${j.db.panels.length}, с данными экстракторов: ${n}.\nЧто восстановить?`,
+        kb: [[btn('📋 Только список панелей и настройки бота', 'bb:yes:db')], [btn('♻️ Всё (+ данные каждой панели)', 'bb:yes:all')], [btn('✖️ Отмена', 'x')]] });
     }
     if (step === 'set_rwtoken') {
       s.step = null;
@@ -644,6 +711,46 @@ async function onMessage(msg) {
   return null;
 }
 
+// ---------- бэкап бота: база бота + данные всех панелей одним файлом ----------
+async function sendBotBackup(chatId, reason) {
+  const out = { app: 'link-extractor-bot', version: 1, createdAt: new Date().toISOString(), reason, db: panels.exportDb(), extractors: {}, errors: {} };
+  for (const p of panels.list()) {
+    try {
+      const b = await panels.api(p, 'POST', '/backups', { sendTelegram: false });
+      const f = await panels.api(p, 'GET', `/backups/${encodeURIComponent(b.name)}`, undefined, { raw: true });
+      out.extractors[p.id] = JSON.parse(f.buf.toString('utf8'));
+    } catch (e) { out.errors[p.id] = e.message; }
+  }
+  const name = `bot-backup-${new Date().toISOString().replace(/[-:]/g, '').replace('T', '-').slice(0, 15)}.json`;
+  const ok = Object.keys(out.extractors).length; const bad = Object.keys(out.errors).length;
+  await tg.sendDoc(chatId, name, Buffer.from(JSON.stringify(out, null, 2)), `💾 Бэкап бота: панелей ${panels.list().length}${bad ? `, ⚠️ без данных: ${bad}` : ''}\n🔒 Внутри токены — не пересылай.`);
+  panels.setSetting('lastBackupAt', out.createdAt);
+  return { ok, bad };
+}
+
+function scheduleBotBackups() {
+  setInterval(async () => {
+    const st = panels.settings();
+    if (!panels.list().length) return;
+    if (st.lastBackupAt && Date.now() - new Date(st.lastBackupAt).getTime() < st.backupHours * 3600 * 1000 - 60000) return;
+    const to = [...ADMINS][0];
+    try { await sendBotBackup(to, 'auto'); } catch (e) { console.warn('[bot-backup]', e.message); }
+  }, 10 * 60 * 1000).unref();
+}
+
+// Экстрактор на этом же сервере: берём его токен прямо из его базы (папка смонтирована только для чтения)
+function discoverLocal() {
+  const file = process.env.EXTRACTOR_DB || '/extractor-data/store.json';
+  let token = ''; let name = '';
+  try { const j = JSON.parse(require('fs').readFileSync(file, 'utf8')); token = j.secrets?.apiToken || ''; name = j.settings?.panelName || ''; } catch { /* нет рядом экстрактора */ }
+  token = token || process.env.API_TOKEN || '';
+  if (!token) return;
+  const url = 'http://link-extractor:3020/link-extractor';
+  const ex = panels.list().find((p) => p.url === url);
+  if (!ex) panels.add({ name: name || 'Эта панель', url, token, local: true });
+  else if (ex.token !== token) { ex.token = token; panels.save(); }
+}
+
 // ---------- привязка уведомлений к группе/топику ----------
 async function bindPrompt(m) {
   const list = panels.list();
@@ -695,15 +802,10 @@ async function onUpdate(u) {
 
 async function main() {
   panels.load();
-  // бот стоит рядом с экстрактором — добавляем «свою» панель автоматически
-  const profiles = String(process.env.COMPOSE_PROFILES || '');
-  const localToken = process.env.API_TOKEN || process.env.ADMIN_PASSWORD;
-  if (profiles.includes('extractor') && localToken) {
-    const url = `http://link-extractor:3020${process.env.BASE_PATH || '/link-extractor'}`;
-    const ex = panels.list().find((p) => p.url === url);
-    if (!ex) panels.add({ name: process.env.PANEL_NAME || 'Эта панель', url, token: localToken, local: true });
-    else if (ex.token !== localToken) { ex.token = localToken; panels.save(); } // токен в .env поменялся — подхватываем
-  }
+  // экстрактор на этом же сервере добавляется сам (и подхватывает смену токена)
+  discoverLocal();
+  setInterval(discoverLocal, 5 * 60 * 1000).unref();
+  scheduleBotBackups();
   await tg.call('setMyCommands', { commands: [{ command: 'start', description: 'Меню' }, { command: 'cancel', description: 'Отменить ввод' }, { command: 'id', description: 'Мой Telegram id' }, { command: 'bind', description: 'В группе: слать сюда уведомления панели' }] }).catch(() => {});
   const me = await tg.call('getMe');
   console.log(`[bot] @${me.username} запущен, панелей: ${panels.list().length}, админов: ${ADMINS.size}`);

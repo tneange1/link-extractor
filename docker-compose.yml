@@ -28,6 +28,8 @@ services:
     env_file: .env
     volumes:
       - ./data/bot:/app/data
+      # база экстрактора на этом же сервере — только чтение (бот берёт из неё токен своей панели)
+      - ./data:/extractor-data:ro
     networks:
       - remnawave-network
 

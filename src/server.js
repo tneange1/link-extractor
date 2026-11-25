@@ -14,21 +14,20 @@ const { replaceMarkers } = require('./replace');
 const PORT = parseInt(process.env.PORT || '3020', 10);
 const UPSTREAM = new URL(process.env.UPSTREAM_URL || 'http://remnawave-subscription-page:3010');
 const BASE = (process.env.BASE_PATH || '/link-extractor').replace(/\/+$/, '');
-const ADMIN_PASSWORD = process.env.ADMIN_PASSWORD || '';
-const ONLY_ACTIVE = (process.env.ONLY_ACTIVE_USERS || 'true') !== 'false';
-const SUB_PREFIX = (process.env.SUB_PATH_PREFIX || '').replace(/^\/+|\/+$/g, '');
-const PANEL_DOMAIN = (process.env.PANEL_DOMAIN || '').toLowerCase();
+// всё это хранится в базе (data/store.json) и меняется из бота/страницы без перезапуска
+const ADMIN_PASSWORD = () => store.getSecrets().adminPassword || '';
+const ONLY_ACTIVE = () => store.cfg('onlyActive') !== false;
+const SUB_PREFIX = () => String(store.cfg('subPathPrefix') || '').replace(/^\/+|\/+$/g, '');
+const PANEL_DOMAIN = () => String(store.cfg('panelDomain') || '').toLowerCase();
 const PANEL_UPSTREAM = new URL(process.env.PANEL_UPSTREAM_URL || 'http://remnawave:3000');
 const PUBLIC_DIR = path.join(__dirname, '..', 'public');
-const SECRET = crypto.createHash('sha256').update(`le:${ADMIN_PASSWORD}`).digest();
 
-if (!ADMIN_PASSWORD) console.warn('[link-extractor] ВНИМАНИЕ: ADMIN_PASSWORD не задан, админка отключена');
 
 // ---------- авторизация ----------
-function sign(exp) { return crypto.createHmac('sha256', SECRET).update(String(exp)).digest('hex'); }
+function sign(exp) { return crypto.createHmac('sha256', crypto.createHash('sha256').update(`le:${ADMIN_PASSWORD()}`).digest()).update(String(exp)).digest('hex'); }
 function makeToken() { const exp = Date.now() + 7 * 24 * 3600 * 1000; return `${exp}.${sign(exp)}`; }
 function checkToken(tok) {
-  if (!tok || !ADMIN_PASSWORD) return false;
+  if (!tok || !ADMIN_PASSWORD()) return false;
   const [exp, sig] = tok.split('.');
   if (!exp || !sig || Number(exp) < Date.now()) return false;
   const a = Buffer.from(sig); const b = Buffer.from(sign(exp));
@@ -39,12 +38,11 @@ function cookies(req) {
   for (const p of (req.headers.cookie || '').split(';')) { const i = p.indexOf('='); if (i > 0) out[p.slice(0, i).trim()] = decodeURIComponent(p.slice(i + 1).trim()); }
   return out;
 }
-// Токен для бота: Authorization: Bearer <API_TOKEN> (или ADMIN_PASSWORD, если API_TOKEN не задан)
-const API_TOKEN = process.env.API_TOKEN || '';
+// Токен для бота: Authorization: Bearer <apiToken из базы> (подходят и старые API_TOKEN / ADMIN_PASSWORD из .env)
 function bearerOk(req) {
   const m = String(req.headers.authorization || '').match(/^Bearer\s+(.+)$/i);
   if (!m) return false;
-  for (const want of [API_TOKEN, ADMIN_PASSWORD]) {
+  for (const want of [store.getSecrets().apiToken, ADMIN_PASSWORD(), process.env.API_TOKEN, process.env.ADMIN_PASSWORD]) {
     if (!want) continue;
     const a = Buffer.from(m[1].trim()); const b = Buffer.from(want);
     if (a.length === b.length && crypto.timingSafeEqual(a, b)) return true;
@@ -84,8 +82,8 @@ async function handleAdmin(req, res, pathname) {
   }
   // Страница — только на домене панели (на домене подписки остаётся API для бота)
   const host = String(req.headers['x-forwarded-host'] || req.headers.host || '').split(':')[0].toLowerCase();
-  if (PANEL_DOMAIN && host !== PANEL_DOMAIN && (sub === '/' || sub === '/index.html')) {
-    res.writeHead(302, { Location: `https://${PANEL_DOMAIN}${BASE}/` }); return res.end();
+  if (PANEL_DOMAIN() && host !== PANEL_DOMAIN() && (sub === '/' || sub === '/index.html')) {
+    res.writeHead(302, { Location: `https://${PANEL_DOMAIN()}${BASE}/` }); return res.end();
   }
   if (sub === '/' || sub === '/index.html') {
     const html = fs.readFileSync(path.join(PUBLIC_DIR, 'index.html'), 'utf8').replace(/__BASE__/g, BASE);
@@ -98,8 +96,8 @@ async function handleAdmin(req, res, pathname) {
     if (route === 'POST /login') {
       if (Date.now() < loginBlockedUntil) return send(res, 429, { error: 'Слишком много попыток, подожди минуту' });
       const { password } = await readBody(req);
-      const a = Buffer.from(String(password || '')); const b = Buffer.from(ADMIN_PASSWORD);
-      if (!ADMIN_PASSWORD || a.length !== b.length || !crypto.timingSafeEqual(a, b)) {
+      const a = Buffer.from(String(password || '')); const b = Buffer.from(ADMIN_PASSWORD());
+      if (!ADMIN_PASSWORD() || a.length !== b.length || !crypto.timingSafeEqual(a, b)) {
         if (++loginFails >= 5) { loginBlockedUntil = Date.now() + 60000; loginFails = 0; }
         return send(res, 401, { error: 'Неверный пароль' });
       }
@@ -117,9 +115,9 @@ async function handleAdmin(req, res, pathname) {
       });
       let squads = []; let squadsError;
       try { squads = rw.enabled() ? await rw.listSquads() : []; } catch (e) { squadsError = e.message; }
-      if (!rw.enabled()) squadsError = 'REMNAWAVE_API_TOKEN не задан — сквады недоступны';
+      if (!rw.enabled()) squadsError = 'Не задан токен Remnawave — укажи его в Настройках (бот или эта страница)';
       let inbounds = []; try { inbounds = rw.enabled() ? await rw.listInbounds() : []; } catch (e) { squadsError = squadsError || e.message; }
-      return send(res, 200, { notify: notify.describe(), version: version(), groups: store.groupsSummary(), telegram: notify.enabled(), sources, squads, inbounds, squadsError, uaPresets: store.UA_PRESETS.map(({ id, label, ua }) => ({ id, label, ua })), settings: store.settings(), activeCount: store.totalActive(), activeCheck: ONLY_ACTIVE && rw.enabled() });
+      return send(res, 200, { notify: notify.describe(), version: version(), groups: store.groupsSummary(), telegram: notify.enabled(), sources, squads, inbounds, squadsError, uaPresets: store.UA_PRESETS.map(({ id, label, ua }) => ({ id, label, ua })), settings: store.settings(), activeCount: store.totalActive(), activeCheck: ONLY_ACTIVE() && rw.enabled() });
     }
     if (route === 'POST /preview') { const { text, userAgent } = await readBody(req); return send(res, 200, await store.preview(text, userAgent || 'auto')); }
     if (route === 'POST /sources') { const b = await readBody(req); return send(res, 200, { created: await store.add(b.text, { title: b.title, userAgent: b.userAgent || 'auto', scope: b.scope || 'new', tag: b.tag }) }); }
@@ -149,6 +147,7 @@ async function handleAdmin(req, res, pathname) {
       }
       return send(res, 200, out);
     }
+    if (route === 'GET /secrets') return send(res, 200, store.getSecrets());
     if (route === 'GET /backups') return send(res, 200, { backups: backup.list() });
     if (route === 'POST /backups') return send(res, 200, await backup.create(store.exportBackup(), 'manual', { send: (await readBody(req)).sendTelegram !== false }));
     if (route === 'POST /update') { requestFlag('.update-request'); return send(res, 200, { ok: true, note: 'Проверю GitHub в течение 30 секунд и пришлю результат в Telegram' }); }
@@ -163,7 +162,7 @@ async function handleAdmin(req, res, pathname) {
       const data = backup.parseRestore(body.backup || body);
       return send(res, 200, await store.restoreState(data));
     }
-    if (route === 'GET /info') return send(res, 200, { app: 'link-extractor', panel: process.env.PANEL_NAME || '', version: version(), apiRemnawave: rw.enabled(), telegram: notify.enabled() });
+    if (route === 'GET /info') return send(res, 200, { app: 'link-extractor', panel: store.cfg('panelName') || '', version: version(), apiRemnawave: rw.enabled(), telegram: notify.enabled() });
     if (route === 'POST /notify-test') {
       if (!notify.enabled()) return send(res, 400, { error: 'В .env не заданы TG_BOT_TOKEN и TG_CHAT_ID' });
       return (await notify.send('✅ Тестовое уведомление: бот настроен правильно')) ? send(res, 200, { ok: true }) : send(res, 502, { error: 'Telegram не принял сообщение — проверь токен и chat id (бот должен быть в чате)' });
@@ -188,7 +187,7 @@ async function getUserInfo(shortUuid) {
   let info = { active: false, squads: [] };
   try {
     const u = await rw.getUserByShortUuid(shortUuid);
-    info = { active: !ONLY_ACTIVE || u.status === 'ACTIVE', squads: (u.activeInternalSquads || []).map((x) => x.uuid) };
+    info = { active: !ONLY_ACTIVE() || u.status === 'ACTIVE', squads: (u.activeInternalSquads || []).map((x) => x.uuid) };
   } catch (e) { console.warn('[user-check]', shortUuid, e.message); }
   userCache.set(shortUuid, { info, exp: Date.now() + 60000 });
   if (userCache.size > 20000) userCache.clear();
@@ -228,7 +227,7 @@ async function augment(shortUuid, bodyIn, ct) {
 
 function extractShortUuid(pathname) {
   let parts = pathname.split('/').filter(Boolean);
-  if (SUB_PREFIX) { if (parts[0] !== SUB_PREFIX) return null; parts = parts.slice(1); }
+  if (SUB_PREFIX()) { if (parts[0] !== SUB_PREFIX()) return null; parts = parts.slice(1); }
   if (parts[0] === 'api' && parts[1] === 'sub') parts = parts.slice(2);
   const id = parts[0];
   if (!id || !/^[A-Za-z0-9_-]{6,64}$/.test(id)) return null;
@@ -323,7 +322,7 @@ const server = http.createServer((req, res) => {
     return handleAdmin(req, res, pathname);
   }
   const host = String(req.headers['x-forwarded-host'] || req.headers.host || '').split(':')[0].toLowerCase();
-  if (PANEL_DOMAIN && host === PANEL_DOMAIN) return proxyPanel(req, res);
+  if (PANEL_DOMAIN() && host === PANEL_DOMAIN()) return proxyPanel(req, res);
   return proxy(req, res, pathname);
 });
 

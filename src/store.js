@@ -25,7 +25,70 @@ const UA_PRESETS = [
 // Порядок перебора в режиме «Авто»
 const AUTO_ORDER = ['happ-android', 'happ-ios', 'incy-android', 'v2rayng', 'happ-windows'];
 
-let state = { sources: [], groups: {}, settings: { refreshMinutes: parseInt(process.env.REFRESH_MINUTES || '10', 10), groupsEnabled: true, allGroupName: '⚡ Авто · все страны' } };
+let state = { sources: [], groups: {}, secrets: {}, settings: { refreshMinutes: parseInt(process.env.REFRESH_MINUTES || '10', 10), groupsEnabled: true, allGroupName: '⚡ Авто · все страны' } };
+
+// ---------- настройки и секреты в базе (data/store.json). .env нужен только для первого импорта ----------
+const bool = (v) => !['false', '0', 'no', 'off', ''].includes(String(v).toLowerCase());
+const int = (v) => parseInt(v, 10);
+const ENV_IMPORT = {
+  panelName: ['PANEL_NAME'], panelDomain: ['PANEL_DOMAIN'], remnawaveToken: ['REMNAWAVE_API_TOKEN'], subPathPrefix: ['SUB_PATH_PREFIX'],
+  onlyActive: ['ONLY_ACTIVE_USERS', bool], autoUpdate: ['AUTO_UPDATE', bool], updateIntervalMinutes: ['UPDATE_INTERVAL_MINUTES', int],
+  remnawaveAutoUpdate: ['REMNAWAVE_AUTO_UPDATE', bool], remnawaveUpdateHours: ['REMNAWAVE_UPDATE_INTERVAL_HOURS', int],
+  backupHours: ['BACKUP_INTERVAL_HOURS', int], backupKeep: ['BACKUP_KEEP', int], backupToTelegram: ['BACKUP_TO_TELEGRAM', bool],
+  notifyChatId: ['TG_CHAT_ID'], notifyThreadId: ['TG_THREAD_ID'],
+};
+const DEFAULTS = {
+  panelName: '', panelDomain: '', subPathPrefix: '', onlyActive: true, autoUpdate: true, updateIntervalMinutes: 10,
+  remnawaveAutoUpdate: false, remnawaveUpdateHours: 24, backupHours: 24, backupKeep: 14, backupToTelegram: true,
+};
+const randomSecret = (n) => crypto.randomBytes(n).toString('base64url').slice(0, n);
+
+function importConfig() {
+  const st = state.settings;
+  for (const [k, [env, conv]] of Object.entries(ENV_IMPORT)) {
+    const v = process.env[env];
+    if (st[k] === undefined && v !== undefined && v !== '') st[k] = conv ? conv(v) : v;
+  }
+  state.secrets = state.secrets || {};
+  if (!state.secrets.adminPassword) state.secrets.adminPassword = process.env.ADMIN_PASSWORD || randomSecret(24);
+  if (!state.secrets.apiToken) state.secrets.apiToken = process.env.API_TOKEN || randomSecret(40);
+  // data/bootstrap.json — так установщик передаёт начальные настройки, не трогая .env
+  const bootFile = path.join(DATA_DIR, 'bootstrap.json');
+  try {
+    if (fs.existsSync(bootFile)) {
+      const b = JSON.parse(fs.readFileSync(bootFile, 'utf8'));
+      for (const [k, v] of Object.entries(b.settings || {})) if (!k.startsWith('_') && v !== '' && v !== null && v !== undefined) st[k] = v;
+      for (const [k, v] of Object.entries(b.secrets || {})) if (v) state.secrets[k] = v;
+      fs.unlinkSync(bootFile);
+      console.log('[config] импортирован bootstrap.json');
+    }
+  } catch (e) { console.warn('[config] bootstrap.json:', e.message); }
+  for (const [k, v] of Object.entries(DEFAULTS)) if (st[k] === undefined) st[k] = v;
+  if (st.panelDomain) st.panelDomain = String(st.panelDomain).replace(/^https?:\/\//, '').replace(/[/:].*$/, '').toLowerCase();
+}
+
+const cfg = (k) => state.settings[k];
+const secrets = () => state.secrets || {};
+
+// updater (shell) читает свои настройки из этого файла
+function writeUpdaterSettings() {
+  const q = (v) => `'${String(v ?? '').replace(/'/g, `'\\''`)}'`;
+  const lines = [
+    `AUTO_UPDATE=${cfg('autoUpdate') ? 'true' : 'false'}`,
+    `UPDATE_INTERVAL_MINUTES=${cfg('updateIntervalMinutes')}`,
+    `REMNAWAVE_AUTO_UPDATE=${cfg('remnawaveAutoUpdate') ? 'true' : 'false'}`,
+    `REMNAWAVE_UPDATE_INTERVAL_HOURS=${cfg('remnawaveUpdateHours')}`,
+    `PANEL_NAME=${q(cfg('panelName'))}`,
+  ];
+  try { fs.writeFileSync(path.join(DATA_DIR, 'updater-settings.env'), `${lines.join('\n')}\n`); } catch (e) { console.warn('[config]', e.message); }
+}
+
+function applyConfig() {
+  if (cfg('remnawaveToken')) rw.setToken(cfg('remnawaveToken'));
+  notify.setPanelName(cfg('panelName'));
+  applyNotifyTarget();
+  writeUpdaterSettings();
+}
 
 function load() {
   try {
@@ -36,9 +99,10 @@ function load() {
     state.groups = state.groups || {};
     if (state.settings.groupsEnabled === undefined) state.settings.groupsEnabled = true;
     if (!state.settings.allGroupName) state.settings.allGroupName = '⚡ Авто · все страны';
-    if (state.settings.remnawaveToken) rw.setToken(state.settings.remnawaveToken);
-    applyNotifyTarget();
   } catch (e) { console.error('[store] не удалось прочитать', e.message); }
+  importConfig();
+  save();
+  applyConfig();
 }
 
 function save() {
@@ -469,6 +533,7 @@ async function add(text, { title, userAgent = 'auto', scope = 'new', tag } = {})
 
 function list() { return state.sources; }
 function settings() { const { remnawaveToken, ...rest } = state.settings; return { ...rest, remnawaveTokenSet: !!remnawaveToken }; }
+function getSecrets() { return { adminPassword: secrets().adminPassword, apiToken: secrets().apiToken }; }
 
 async function update(id, patch) {
   const s = state.sources.find((x) => x.id === id);
@@ -523,6 +588,15 @@ function applyNotifyTarget() {
 }
 
 async function setSettings(patch) {
+  const st = state.settings;
+  const num = (k, min, max) => { if (patch[k] === undefined) return; const n = parseInt(patch[k], 10); if (!(n >= min && n <= max)) throw new Error(`${k}: число ${min}–${max}`); st[k] = n; };
+  if (typeof patch.panelName === 'string') st.panelName = patch.panelName.trim().slice(0, 40);
+  if (typeof patch.panelDomain === 'string') st.panelDomain = patch.panelDomain.trim().replace(/^https?:\/\//, '').replace(/[/:].*$/, '').toLowerCase();
+  if (typeof patch.subPathPrefix === 'string') st.subPathPrefix = patch.subPathPrefix.trim().replace(/^\/+|\/+$/g, '');
+  for (const k of ['onlyActive', 'autoUpdate', 'remnawaveAutoUpdate', 'backupToTelegram']) if (typeof patch[k] === 'boolean') st[k] = patch[k];
+  num('updateIntervalMinutes', 1, 1440); num('remnawaveUpdateHours', 1, 720); num('backupHours', 1, 720); num('backupKeep', 1, 100);
+  if (patch.regeneratePassword === true) state.secrets.adminPassword = randomSecret(24);
+  applyConfig();
   if (patch.notifyChatId !== undefined) {
     const c = String(patch.notifyChatId || '').trim();
     if (c && !/^-?\d{3,20}$/.test(c)) throw new Error('chat id — это число, например -1001234567890');
@@ -591,15 +665,17 @@ function schedule() {
 }
 
 function exportState() { return JSON.parse(JSON.stringify(state)); }
-// для файла бэкапа: без токена Remnawave (секрет и привязан к конкретной панели)
-function exportBackup() { const s = exportState(); delete s.settings.remnawaveToken; return s; }
+// в бэкап идёт всё, включая настройки и секреты
+function exportBackup() { return exportState(); }
 
 async function restoreState(data) {
   const backup = require('./backup');
   const prev = exportState();
   await backup.create(exportBackup(), 'before-restore', { send: false });
-  state = { ...prev, ...data, settings: { ...prev.settings, ...(data.settings || {}), remnawaveToken: prev.settings.remnawaveToken }, groups: data.groups || prev.groups || {} };
-  applyNotifyTarget();
+  // секреты и токен Remnawave оставляем текущие, если они есть (иначе бот потеряет доступ к этой панели)
+  state = { ...prev, ...data, settings: { ...prev.settings, ...(data.settings || {}), remnawaveToken: prev.settings.remnawaveToken || data.settings?.remnawaveToken }, secrets: { ...(data.secrets || {}), ...prev.secrets }, groups: data.groups || prev.groups || {} };
+  importConfig();
+  applyConfig();
   if (!Array.isArray(state.sources)) state.sources = [];
   if (state.settings.groupsEnabled === undefined) state.settings.groupsEnabled = true;
   if (!state.settings.allGroupName) state.settings.allGroupName = '⚡ Авто · все страны';
@@ -630,7 +706,7 @@ async function restoreState(data) {
 
 function init() {
   load();
-  require('./backup').schedule(exportBackup);
+  require('./backup').schedule(exportBackup, cfg);
   schedule();
   setInterval(() => refreshHostStates(), 60000).unref();
   refreshHostStates();
@@ -646,4 +722,4 @@ function groupsSummary() {
   return list;
 }
 
-module.exports = { exportBackup, exportState, restoreState, groupsSummary, expandGroup, syncGroups, groupsInfo: () => state.groups, resolveMarker, syncHosts, init, preview, add, list, update, remove, refresh, settings, setSettings, extraFor, hasAnySources, totalActive, decodeLinks, UA_PRESETS, uaLabel };
+module.exports = { cfg, getSecrets, exportBackup, exportState, restoreState, groupsSummary, expandGroup, syncGroups, groupsInfo: () => state.groups, resolveMarker, syncHosts, init, preview, add, list, update, remove, refresh, settings, setSettings, extraFor, hasAnySources, totalActive, decodeLinks, UA_PRESETS, uaLabel };

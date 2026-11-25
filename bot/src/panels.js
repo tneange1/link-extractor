@@ -1,15 +1,30 @@
 'use strict';
-// Список панелей (экстракторов) и клиент их API.
+// База бота (data/db.json): список панелей и настройки бота + клиент API экстракторов.
 const fs = require('fs');
 const path = require('path');
 const crypto = require('crypto');
 
 const DATA_DIR = process.env.DATA_DIR || path.join(__dirname, '..', 'data');
-const FILE = path.join(DATA_DIR, 'panels.json');
+const FILE = path.join(DATA_DIR, 'db.json');
+const OLD_FILE = path.join(DATA_DIR, 'panels.json');
 
-let state = { panels: [] };
+const DEFAULT_SETTINGS = { backupHours: 24, lastBackupAt: null };
+let state = { panels: [], settings: { ...DEFAULT_SETTINGS } };
 function load() {
-  try { if (fs.existsSync(FILE)) state = { panels: [], ...JSON.parse(fs.readFileSync(FILE, 'utf8')) }; } catch (e) { console.error('[panels]', e.message); }
+  try {
+    const f = fs.existsSync(FILE) ? FILE : fs.existsSync(OLD_FILE) ? OLD_FILE : null;
+    if (f) state = { panels: [], ...JSON.parse(fs.readFileSync(f, 'utf8')) };
+    state.settings = { ...DEFAULT_SETTINGS, ...(state.settings || {}) };
+    if (f === OLD_FILE) { save(); fs.renameSync(OLD_FILE, `${OLD_FILE}.migrated`); }
+  } catch (e) { console.error('[db]', e.message); }
+}
+const settings = () => state.settings;
+function setSetting(k, v) { state.settings[k] = v; save(); }
+const exportDb = () => JSON.parse(JSON.stringify(state));
+function importDb(db) {
+  if (!db || !Array.isArray(db.panels)) throw new Error('В файле нет списка панелей');
+  state = { panels: db.panels, settings: { ...DEFAULT_SETTINGS, ...(db.settings || {}) } };
+  save();
 }
 function save() {
   fs.mkdirSync(DATA_DIR, { recursive: true });
@@ -58,4 +73,4 @@ async function api(panel, method, apiPath, body, { raw = false, timeout = 60000 
   return j;
 }
 
-module.exports = { load, save, list, get, add, remove, rename, api, normUrl };
+module.exports = { load, save, list, get, add, remove, rename, api, normUrl, settings, setSetting, exportDb, importDb };

@@ -10,7 +10,8 @@ function setTarget(chat, thread) { target = { chat: chat ? String(chat) : '', th
 const chatId = () => target.chat || ENV_CHAT;
 const threadId = () => (target.chat ? target.thread : ENV_THREAD);
 function describe() { return { chatId: chatId(), threadId: threadId(), custom: !!target.chat }; }
-const PANEL = process.env.PANEL_NAME || '';
+let PANEL = process.env.PANEL_NAME || '';
+function setPanelName(n) { PANEL = n || ''; }
 const API = (process.env.TG_API_BASE || 'https://api.telegram.org').replace(/\/+$/, '');
 
 const enabled = () => !!(TOKEN && chatId());
@@ -44,4 +45,4 @@ async function sendDocument(filename, buf, caption) {
   } catch (e) { console.warn('[telegram doc]', e.message); return false; }
 }
 
-module.exports = { enabled, send, sendDocument, esc, setTarget, describe };
+module.exports = { enabled, send, sendDocument, esc, setTarget, describe, setPanelName };

@@ -159,6 +159,16 @@
         <span id="rwTokenState" class="muted" style="font-size:12px"></span>
       </div>
       <div class="row" style="margin-bottom:14px">
+        <span class="muted">Название панели:</span><input type="text" id="cfgName" style="max-width:220px">
+        <span class="muted">Домен панели:</span><input type="text" id="cfgDomain" style="max-width:220px" placeholder="panel.example.com">
+        <span class="muted">Бэкап каждые</span><input type="number" id="cfgBackupH" min="1" max="720" style="width:80px"><span class="muted">ч</span>
+        <button id="saveCfg">Сохранить</button>
+      </div>
+      <div class="row" style="margin-bottom:14px">
+        <label class="switch"><input type="checkbox" id="cfgAutoUpd"><i></i></label><span>Автообновление экстрактора</span>
+        <label class="switch"><input type="checkbox" id="cfgRwAutoUpd"><i></i></label><span>Автообновление Remnawave</span>
+      </div>
+      <div class="row" style="margin-bottom:14px">
         <span class="muted">Версия: <b id="ver">—</b></span>
         <button id="updNow">Обновить экстрактор</button>
         <button id="updRw">Обновить Remnawave</button>
@@ -238,6 +248,11 @@ async function load() {
   $('stubSel').innerHTML = (st ? '' : `<option value="">— не найден профиль без нод —</option>`) + STATE.inbounds.map((i) => `<option value="${i.uuid}" ${st && st.uuid === i.uuid ? 'selected' : ''}>${esc(i.profileName)} → ${esc(i.tag)} (${esc(i.type)})${i.profileNodes ? ' ⚠ на нодах: ' + i.profileNodes : ''}</option>`).join('');
   $('hostTag').closest('.field').classList.toggle('hidden', !st);
   $('ver').textContent = STATE.version || '—';
+  const C = STATE.settings;
+  if (document.activeElement !== $('cfgName')) $('cfgName').value = C.panelName || '';
+  if (document.activeElement !== $('cfgDomain')) $('cfgDomain').value = C.panelDomain || '';
+  $('cfgBackupH').value = C.backupHours || 24;
+  $('cfgAutoUpd').checked = C.autoUpdate !== false; $('cfgRwAutoUpd').checked = !!C.remnawaveAutoUpdate;
   $('rwTokenState').innerHTML = STATE.squadsError ? '<span class="err">' + esc(STATE.squadsError) + '</span>' : (STATE.settings.remnawaveTokenSet ? '✅ задан здесь' : '✅ из .env');
   $('grpOn').checked = !!STATE.settings.groupsEnabled;
   $('allName').value = STATE.settings.allGroupName || '';
@@ -360,6 +375,9 @@ $('dbgBtn').onclick = async () => {
   } catch (e) { $('dbgOut').textContent = 'Ошибка: ' + e.message; }
   $('dbgBtn').disabled = false;
 };
+$('saveCfg').onclick = async () => { try { await api('/settings', { method: 'POST', body: { panelName: $('cfgName').value, panelDomain: $('cfgDomain').value, backupHours: +$('cfgBackupH').value } }); toast('Сохранено'); await load(); } catch (e) { toast(e.message, true); } };
+$('cfgAutoUpd').onchange = async () => { try { await api('/settings', { method: 'POST', body: { autoUpdate: $('cfgAutoUpd').checked } }); toast('Сохранено'); } catch (e) { toast(e.message, true); } };
+$('cfgRwAutoUpd').onchange = async () => { if ($('cfgRwAutoUpd').checked && !confirm('Панель Remnawave будет сама обновляться и перезапускаться. Включить?')) { $('cfgRwAutoUpd').checked = false; return; } try { await api('/settings', { method: 'POST', body: { remnawaveAutoUpdate: $('cfgRwAutoUpd').checked } }); toast('Сохранено'); } catch (e) { toast(e.message, true); } };
 $('saveRwToken').onclick = async () => { const t = $('rwToken').value.trim(); if (!t) return toast('Вставь токен', true); $('saveRwToken').disabled = true; try { await api('/settings', { method: 'POST', body: { remnawaveToken: t } }); $('rwToken').value = ''; toast('Токен подошёл, синхронизирую…'); setTimeout(load, 4000); } catch (e) { toast(e.message, true); } $('saveRwToken').disabled = false; };
 $('updNow').onclick = async () => { try { const r = await api('/update', { method: 'POST' }); toast(r.note); } catch (e) { toast(e.message, true); } };
 $('updRw').onclick = async () => { if (!confirm('Скачать новые образы Remnawave и перезапустить панель? Будет перерыв на ~10–30 секунд.')) return; try { const r = await api('/update-remnawave', { method: 'POST' }); toast(r.note); } catch (e) { toast(e.message, true); } };
