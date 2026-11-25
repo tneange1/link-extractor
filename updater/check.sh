@@ -6,6 +6,13 @@ BRANCH="${UPDATE_BRANCH:-main}"
 # миграция: раньше экстрактор был без профиля
 if [ -f .env ] && ! grep -q '^COMPOSE_PROFILES=' .env; then echo 'COMPOSE_PROFILES=extractor' >> .env; fi
 
+# дубли ключей в .env (последнее пустое значение перебивало рабочее) — чиним и перезапускаем
+sh ./updater/fix-env.sh .env
+if [ $? -eq 10 ]; then
+  SVC=$(docker compose config --services 2>/dev/null | grep -v '^updater$' | tr '\n' ' ')
+  [ -n "$(echo $SVC)" ] && docker compose up -d $SVC && tg_msg "🩹 В .env были повторяющиеся ключи с пустыми значениями — починил и перезапустил: <code>$SVC</code>"
+fi
+
 # Если работает старый цикл (без tick.sh) — разово перезапускаем updater, чтобы включились бэкапы БД
 recreate_self() {
   docker run -d --rm --name link-extractor-updater-helper \

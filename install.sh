@@ -153,6 +153,7 @@ else
 fi
 cd "$DIR"
 mkdir -p data/bot data/backups && chown -R 1000:1000 data
+[ -f .env ] && sh ./updater/fix-env.sh .env >/dev/null || true
 
 # ---------- .env ----------
 touch .env

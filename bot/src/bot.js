@@ -649,7 +649,9 @@ async function main() {
   const localToken = process.env.API_TOKEN || process.env.ADMIN_PASSWORD;
   if (profiles.includes('extractor') && localToken) {
     const url = `http://link-extractor:3020${process.env.BASE_PATH || '/link-extractor'}`;
-    if (!panels.list().some((p) => p.url === url)) panels.add({ name: process.env.PANEL_NAME || 'Эта панель', url, token: localToken, local: true });
+    const ex = panels.list().find((p) => p.url === url);
+    if (!ex) panels.add({ name: process.env.PANEL_NAME || 'Эта панель', url, token: localToken, local: true });
+    else if (ex.token !== localToken) { ex.token = localToken; panels.save(); } // токен в .env поменялся — подхватываем
   }
   await tg.call('setMyCommands', { commands: [{ command: 'start', description: 'Меню' }, { command: 'cancel', description: 'Отменить ввод' }, { command: 'id', description: 'Мой Telegram id' }] }).catch(() => {});
   const me = await tg.call('getMe');
