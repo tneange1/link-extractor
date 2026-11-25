@@ -7,6 +7,7 @@ const crypto = require('crypto');
 const store = require('./store');
 const rw = require('./remnawave');
 const notify = require('./notify');
+const backup = require('./backup');
 const { mergeSubscription } = require('./merge');
 const { replaceMarkers } = require('./replace');
 
@@ -38,7 +39,19 @@ function cookies(req) {
   for (const p of (req.headers.cookie || '').split(';')) { const i = p.indexOf('='); if (i > 0) out[p.slice(0, i).trim()] = decodeURIComponent(p.slice(i + 1).trim()); }
   return out;
 }
-const authed = (req) => checkToken(cookies(req).le_session);
+// Токен для бота: Authorization: Bearer <API_TOKEN> (или ADMIN_PASSWORD, если API_TOKEN не задан)
+const API_TOKEN = process.env.API_TOKEN || '';
+function bearerOk(req) {
+  const m = String(req.headers.authorization || '').match(/^Bearer\s+(.+)$/i);
+  if (!m) return false;
+  for (const want of [API_TOKEN, ADMIN_PASSWORD]) {
+    if (!want) continue;
+    const a = Buffer.from(m[1].trim()); const b = Buffer.from(want);
+    if (a.length === b.length && crypto.timingSafeEqual(a, b)) return true;
+  }
+  return false;
+}
+const authed = (req) => checkToken(cookies(req).le_session) || bearerOk(req);
 
 function send(res, status, body, type = 'application/json; charset=utf-8', extra = {}) {
   const buf = Buffer.isBuffer(body) ? body : Buffer.from(typeof body === 'string' ? body : JSON.stringify(body));
@@ -126,6 +139,20 @@ async function handleAdmin(req, res, pathname) {
       }
       return send(res, 200, out);
     }
+    if (route === 'GET /backups') return send(res, 200, { backups: backup.list() });
+    if (route === 'POST /backups') return send(res, 200, await backup.create(store.exportState(), 'manual', { send: (await readBody(req)).sendTelegram !== false }));
+    if (route === 'POST /backups/panel-db') { backup.requestPanelDb(); return send(res, 200, { ok: true, note: 'Бэкап БД сделает updater в течение минуты и пришлёт в Telegram' }); }
+    const bm = sub.match(/^\/api\/backups\/([A-Za-z0-9._-]+)$/);
+    if (bm && req.method === 'GET') {
+      const buf = backup.read(bm[1]);
+      return send(res, 200, buf, bm[1].endsWith('.gz') ? 'application/gzip' : 'application/json', { 'Content-Disposition': `attachment; filename="${bm[1]}"` });
+    }
+    if (route === 'POST /restore') {
+      const body = await readBody(req, 20 * 1024 * 1024);
+      const data = backup.parseRestore(body.backup || body);
+      return send(res, 200, await store.restoreState(data));
+    }
+    if (route === 'GET /info') return send(res, 200, { app: 'link-extractor', panel: process.env.PANEL_NAME || '', apiRemnawave: rw.enabled(), telegram: notify.enabled() });
     if (route === 'POST /notify-test') {
       if (!notify.enabled()) return send(res, 400, { error: 'В .env не заданы TG_BOT_TOKEN и TG_CHAT_ID' });
       return (await notify.send('✅ Тестовое уведомление: бот настроен правильно')) ? send(res, 200, { ok: true }) : send(res, 502, { error: 'Telegram не принял сообщение — проверь токен и chat id (бот должен быть в чате)' });

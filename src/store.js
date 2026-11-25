@@ -456,7 +456,7 @@ async function add(text, { title, userAgent = 'auto', scope = 'new', tag } = {})
   save();
   await syncGroups();
   const n = created.reduce((a, x) => a + (x.links || []).length, 0);
-  if (n) notify.send(`➕ Добавлен источник <b>${notify.esc(created.map(srcLabel).join(', '))}</b>: ${n} ключей`);
+  if (n) notify.send(`➕ Добавлен источник <b>${notify.esc(created.map(srcLabel).join(', '))}</b>: ${n} ${n % 10 === 1 && n % 100 !== 11 ? 'ключ' : [2, 3, 4].includes(n % 10) && ![12, 13, 14].includes(n % 100) ? 'ключа' : 'ключей'}`);
   return created;
 }
 
@@ -562,8 +562,37 @@ function schedule() {
   timer.unref();
 }
 
+function exportState() { return JSON.parse(JSON.stringify(state)); }
+
+async function restoreState(data) {
+  const backup = require('./backup');
+  const prev = exportState();
+  await backup.create(prev, 'before-restore', { send: false });
+  state = { ...prev, ...data, settings: { ...prev.settings, ...(data.settings || {}) }, groups: data.groups || prev.groups || {} };
+  if (!Array.isArray(state.sources)) state.sources = [];
+  if (state.settings.groupsEnabled === undefined) state.settings.groupsEnabled = true;
+  if (!state.settings.allGroupName) state.settings.allGroupName = '⚡ Авто · все страны';
+  // хосты источников, которых нет в бэкапе, убираем из панели
+  const keep = new Set(state.sources.map((x) => x.id));
+  const orphan = prev.sources.filter((x) => !keep.has(x.id)).flatMap((x) => Object.values(x.hosts || {}).map((h) => h.uuid));
+  if (orphan.length) { try { await rw.deleteHosts(orphan); } catch (e) { console.warn('[restore]', e.message); } }
+  save();
+  // приводим панель в соответствие: хосты ключей, сквады, группы
+  await ensureStub();
+  // хосты из бэкапа, которых уже нет в панели, создаём заново (а не считаем «выключенными вручную»)
+  try {
+    const alive = new Set((await rw.listHosts()).map((h) => h.uuid));
+    for (const src of state.sources) for (const [id, h] of Object.entries(src.hosts || {})) if (!alive.has(h.uuid)) delete src.hosts[id];
+  } catch (e) { console.warn('[restore]', e.message); }
+  for (const src of state.sources) { try { await syncHosts(src); } catch (e) { src.hostError = e.message; } }
+  save();
+  await syncGroups();
+  return { sources: state.sources.length };
+}
+
 function init() {
   load();
+  require('./backup').schedule(exportState);
   schedule();
   setInterval(() => refreshHostStates(), 60000).unref();
   refreshHostStates();
@@ -579,4 +608,4 @@ function groupsSummary() {
   return list;
 }
 
-module.exports = { groupsSummary, expandGroup, syncGroups, groupsInfo: () => state.groups, resolveMarker, syncHosts, init, preview, add, list, update, remove, refresh, settings, setSettings, extraFor, hasAnySources, totalActive, decodeLinks, UA_PRESETS, uaLabel };
+module.exports = { exportState, restoreState, groupsSummary, expandGroup, syncGroups, groupsInfo: () => state.groups, resolveMarker, syncHosts, init, preview, add, list, update, remove, refresh, settings, setSettings, extraFor, hasAnySources, totalActive, decodeLinks, UA_PRESETS, uaLabel };

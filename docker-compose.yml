@@ -1,7 +1,12 @@
 name: link-extractor
 
+# Что запускать, задаёт COMPOSE_PROFILES в .env:
+#   extractor      — экстрактор (на сервере с панелью)
+#   bot            — Telegram-бот управления
+#   extractor,bot  — оба на одном сервере
 services:
   link-extractor:
+    profiles: ["extractor"]
     build: .
     image: link-extractor:latest
     container_name: link-extractor
@@ -13,7 +18,20 @@ services:
     networks:
       - remnawave-network
 
-  # Автообновление: следит за GitHub и пересобирает link-extractor (AUTO_UPDATE=false — выключить)
+  bot:
+    profiles: ["bot"]
+    build: ./bot
+    image: link-extractor-bot:latest
+    container_name: link-extractor-bot
+    hostname: link-extractor-bot
+    restart: always
+    env_file: .env
+    volumes:
+      - ./data/bot:/app/data
+    networks:
+      - remnawave-network
+
+  # Автообновление с GitHub + бэкапы БД панели (AUTO_UPDATE=false — выключить обновления)
   updater:
     image: docker:27-cli
     container_name: link-extractor-updater
